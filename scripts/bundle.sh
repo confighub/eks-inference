@@ -58,12 +58,32 @@ push)
 			echo "ERROR: dist/${component}.tar.gz missing — run 'make bundles' first." >&2
 			exit 1
 		}
-		oras push \
-			"${REGISTRY}/${component}:latest" \
-			--artifact-type application/vnd.confighub.config.bundle.v1 \
-			--annotation "org.opencontainers.image.created=1970-01-01T00:00:00Z" \
-			"dist/${component}.tar.gz:application/vnd.oci.image.layer.v1.tar+gzip"
-		echo "  pushed ${REGISTRY}/${component}:latest"
+		# Pushed from inside dist/ so the layer's org.opencontainers.image.title is
+		# a bare "<component>.tar.gz". oras uses the path exactly as given, so
+		# pushing "dist/<component>.tar.gz" from the repo root records that whole
+		# path as the title — and `oras pull` then recreates a dist/ directory on
+		# the consumer's disk. Harmless for `cub variant upload`, which reads the
+		# layer either way, but it makes these bundles inconsistent with the other
+		# confighub config bundles (argobot, cubbychat) that ship bare filenames.
+		(
+			cd dist && oras push \
+				"${REGISTRY}/${component}:latest" \
+				--artifact-type application/vnd.confighub.config.bundle.v1 \
+				--annotation "org.opencontainers.image.created=1970-01-01T00:00:00Z" \
+				"${component}.tar.gz:application/vnd.oci.image.layer.v1.tar+gzip"
+		)
+		# Assert the layout rather than trust it. This is the only place the
+		# bundle's on-disk shape is decided, and getting it wrong is invisible
+		# until someone runs `oras pull` and finds an unexpected directory.
+		title="$(oras manifest fetch "${REGISTRY}/${component}:latest" 2>/dev/null |
+			jq -r '.layers[0].annotations["org.opencontainers.image.title"] // ""')"
+		if [[ "$title" != "${component}.tar.gz" ]]; then
+			echo "ERROR: layer title is '${title}', expected '${component}.tar.gz'." >&2
+			echo "       The bundle would extract into an unexpected directory." >&2
+			exit 1
+		fi
+
+		echo "  pushed ${REGISTRY}/${component}:latest  (layer: ${title})"
 	done
 	;;
 
