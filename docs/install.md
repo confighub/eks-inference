@@ -26,7 +26,7 @@ which is, per component:
 cub variant upload \
   --component aws-network --variant base \
   --granularity per-file \
-  oci://ghcr.io/confighub/configs/aws-network
+  oci://ghcr.io/confighub/configs/eks-inference/aws-network
 ```
 
 This creates a Space named `<component>-base` (from the default space pattern

@@ -14,9 +14,9 @@ kind and create AWS infrastructure:
 
 | Component | Bundle | What it creates |
 |---|---|---|
-| `ack-controllers` | `ghcr.io/confighub/configs/ack-controllers` | ACK EC2, IAM, and EKS controllers + their CRDs |
-| `aws-network` | `ghcr.io/confighub/configs/aws-network` | VPC, 3 public + 3 private subnets, IGW, NAT, route tables, security group |
-| `eks-cluster` | `ghcr.io/confighub/configs/eks-cluster` | Cluster and node IAM roles, EKS control plane, pod identity addon, t4g.medium system nodegroup |
+| `ack-controllers` | `ghcr.io/confighub/configs/eks-inference/ack-controllers` | ACK EC2, IAM, and EKS controllers + their CRDs |
+| `aws-network` | `ghcr.io/confighub/configs/eks-inference/aws-network` | VPC, 3 public + 3 private subnets, IGW, NAT, route tables, security group |
+| `eks-cluster` | `ghcr.io/confighub/configs/eks-inference/eks-cluster` | Cluster and node IAM roles, EKS control plane, pod identity addon, t4g.medium system nodegroup |
 
 Not yet built: the **workload plane** — Karpenter, the inference nodepools
 (quantized-GPU and H200), and the inference runtime. Those target the EKS cluster
@@ -121,7 +121,7 @@ is an explicit operation — see [docs/teardown.md](./docs/teardown.md).
 make render    # helm charts + handwritten CRs -> configs/
 make verify    # fail if configs/ drifts from sources (CI gate)
 make bundles   # configs/ -> dist/<component>.tar.gz
-make push      # dist/ -> ghcr.io/confighub/configs/<component>:latest
+make push      # dist/ -> ghcr.io/confighub/configs/eks-inference/<component>:latest
 ```
 
 CI runs exactly these targets — there is no build logic in the workflow file.

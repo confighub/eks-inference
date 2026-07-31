@@ -66,5 +66,5 @@ jobs:
 
       - name: Render, guard, package, and push
         env:
-          REGISTRY: ghcr.io/${{ github.repository_owner }}/configs
+          REGISTRY: ghcr.io/${{ github.repository_owner }}/configs/eks-inference
         run: make push
