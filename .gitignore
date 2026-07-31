@@ -6,3 +6,7 @@ dist/
 aws-creds.yaml
 *.credentials
 .env
+
+# Plugin build output
+/eks-inference
+/eksinf
