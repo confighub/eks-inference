@@ -1,0 +1,42 @@
+# Karpenter controller.
+#
+# Runs on the t4g.medium system nodegroup — the managed nodegroup exists
+# precisely because Karpenter cannot schedule the node Karpenter runs on. That
+# nodegroup is arm64, and Karpenter publishes multi-arch images, so this works;
+# a chart that did not would CrashLoop with an exec format error rather than
+# fail to schedule.
+settings:
+  clusterName: inference-demo
+
+  # DELIBERATELY EMPTY. Karpenter's interruption queue is optional. Without it
+  # you lose graceful handling of spot reclaims and scheduled maintenance —
+  # nodes go away with less warning — but provisioning and consolidation work
+  # normally. Enabling it would mean an SQS queue and EventBridge rules, and
+  # therefore ACK controllers for both services in the mgmt plane. See
+  # docs/karpenter.md before turning this on.
+  interruptionQueue: ""
+
+# The ServiceAccount name is load-bearing: it must match the serviceAccount in
+# the PodIdentityAssociation created by the karpenter-aws component
+# (kube-system/karpenter). Rename it here and the controller silently gets no
+# AWS credentials.
+serviceAccount:
+  create: true
+  name: karpenter
+
+# One replica. The chart defaults to two with required pod anti-affinity, which
+# needs two schedulable nodes; the system nodegroup has exactly two and also
+# hosts CoreDNS and the pod identity agent. One replica means provisioning
+# pauses if that node is lost, which is acceptable here and would not be in
+# production.
+replicas: 1
+
+controller:
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 512Mi
+
+logLevel: info

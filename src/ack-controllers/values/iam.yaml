@@ -1,0 +1,19 @@
+# ACK IAM controller — provisions the EKS cluster and node roles.
+#
+# See ec2.yaml for why deletionPolicy is retain.
+aws:
+  region: us-west-2
+  credentials:
+    secretName: aws-creds
+    secretKey: credentials
+    profile: default
+
+deletionPolicy: retain
+installScope: cluster
+
+log:
+  level: info
+
+metrics:
+  service:
+    create: false

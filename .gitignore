@@ -1,0 +1,8 @@
+# Build output. configs/ is deliberately NOT ignored — see docs/flattening.md.
+dist/
+
+# Never commit AWS credentials. The Secret is applied out of band; see
+# docs/aws-credentials.md.
+aws-creds.yaml
+*.credentials
+.env

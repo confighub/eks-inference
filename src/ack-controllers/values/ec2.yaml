@@ -1,0 +1,22 @@
+# ACK EC2 controller — provisions the VPC, subnets, gateways, and route tables.
+#
+# deletionPolicy: retain is deliberate and applies to every resource this
+# controller manages. Argo CD prunes anything that leaves its bundle, and a
+# pruned ACK resource means a deleted AWS resource. Retain makes that class of
+# accident inert; teardown is an explicit operation instead. See docs/teardown.md.
+aws:
+  region: us-west-2
+  credentials:
+    secretName: aws-creds
+    secretKey: credentials
+    profile: default
+
+deletionPolicy: retain
+installScope: cluster
+
+log:
+  level: info
+
+metrics:
+  service:
+    create: false

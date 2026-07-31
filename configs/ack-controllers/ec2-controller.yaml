@@ -1,0 +1,522 @@
+# Source: ec2-chart/templates/service-account.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/name: ec2-chart
+    app.kubernetes.io/instance: ack-ec2
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.18.4"
+    k8s-app: ec2-chart
+    helm.sh/chart: ec2-chart-1.18.4
+  name: ack-ec2-controller
+  namespace: ack-system
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+---
+# Source: ec2-chart/templates/caches-role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ack-ec2-ec2-chart-namespaces-cache
+  labels:
+    app.kubernetes.io/name: ec2-chart
+    app.kubernetes.io/instance: ack-ec2
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.18.4"
+    k8s-app: ec2-chart
+    helm.sh/chart: ec2-chart-1.18.4
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+    verbs:
+      - get
+      - list
+      - watch
+---
+# Source: ec2-chart/templates/cluster-role-controller.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ack-ec2-ec2-chart
+  labels:
+    app.kubernetes.io/name: ec2-chart
+    app.kubernetes.io/instance: ack-ec2
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.18.4"
+    k8s-app: ec2-chart
+    helm.sh/chart: ec2-chart-1.18.4
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+      - secrets
+    verbs:
+      - get
+      - list
+      - patch
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ec2.services.k8s.aws
+    resources:
+      - capacityreservations
+      - dhcpoptions
+      - egressonlyinternetgateways
+      - elasticipaddresses
+      - flowlogs
+      - instances
+      - internetgateways
+      - launchtemplates
+      - managedprefixlists
+      - natgateways
+      - networkacls
+      - routetables
+      - securitygroups
+      - subnets
+      - transitgateways
+      - transitgatewayvpcattachments
+      - vpcendpoints
+      - vpcendpointserviceconfigurations
+      - vpcpeeringconnections
+      - vpcs
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - ec2.services.k8s.aws
+    resources:
+      - capacityreservations/status
+      - dhcpoptions/status
+      - egressonlyinternetgateways/status
+      - elasticipaddresses/status
+      - flowlogs/status
+      - instances/status
+      - internetgateways/status
+      - launchtemplates/status
+      - managedprefixlists/status
+      - natgateways/status
+      - networkacls/status
+      - routetables/status
+      - securitygroups/status
+      - subnets/status
+      - transitgateways/status
+      - transitgatewayvpcattachments/status
+      - vpcendpoints/status
+      - vpcendpointserviceconfigurations/status
+      - vpcpeeringconnections/status
+      - vpcs/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - iam.services.k8s.aws
+    resources:
+      - roles
+      - roles/status
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - services.k8s.aws
+    resources:
+      - fieldexports
+      - iamroleselectors
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - services.k8s.aws
+    resources:
+      - fieldexports/status
+      - iamroleselectors/status
+    verbs:
+      - get
+      - patch
+      - update
+---
+# Source: ec2-chart/templates/caches-role-binding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ack-ec2-ec2-chart-namespaces-cache
+  labels:
+    app.kubernetes.io/name: ec2-chart
+    app.kubernetes.io/instance: ack-ec2
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.18.4"
+    k8s-app: ec2-chart
+    helm.sh/chart: ec2-chart-1.18.4
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+roleRef:
+  kind: ClusterRole
+  apiGroup: rbac.authorization.k8s.io
+  name: ack-ec2-ec2-chart-namespaces-cache
+subjects:
+  - kind: ServiceAccount
+    name: ack-ec2-controller
+    namespace: ack-system
+---
+# Source: ec2-chart/templates/cluster-role-binding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ack-ec2-ec2-chart-rolebinding
+  labels:
+    app.kubernetes.io/name: ec2-chart
+    app.kubernetes.io/instance: ack-ec2
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.18.4"
+    k8s-app: ec2-chart
+    helm.sh/chart: ec2-chart-1.18.4
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+roleRef:
+  kind: ClusterRole
+  apiGroup: rbac.authorization.k8s.io
+  name: ack-ec2-ec2-chart
+subjects:
+  - kind: ServiceAccount
+    name: ack-ec2-controller
+    namespace: ack-system
+---
+# Source: ec2-chart/templates/caches-role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ack-ec2-ec2-chart-configmaps-cache
+  namespace: ack-system
+  labels:
+    app.kubernetes.io/name: ec2-chart
+    app.kubernetes.io/instance: ack-ec2
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.18.4"
+    k8s-app: ec2-chart
+    helm.sh/chart: ec2-chart-1.18.4
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+      - watch
+---
+# Source: ec2-chart/templates/role-reader.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  creationTimestamp: null
+  name: ack-ec2-ec2-chart-reader
+  namespace: ack-system
+  labels:
+    app.kubernetes.io/name: ec2-chart
+    app.kubernetes.io/instance: ack-ec2
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.18.4"
+    k8s-app: ec2-chart
+    helm.sh/chart: ec2-chart-1.18.4
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+rules:
+  - apiGroups:
+      - ec2.services.k8s.aws
+    resources:
+      - capacityreservations
+      - dhcpoptions
+      - egressonlyinternetgateways
+      - elasticipaddresses
+      - flowlogs
+      - instances
+      - internetgateways
+      - launchtemplates
+      - managedprefixlists
+      - natgateways
+      - networkacls
+      - routetables
+      - securitygroups
+      - subnets
+      - transitgateways
+      - transitgatewayvpcattachments
+      - vpcs
+      - vpcendpoints
+      - vpcendpointserviceconfigurations
+      - vpcpeeringconnections
+    verbs:
+      - get
+      - list
+      - watch
+---
+# Source: ec2-chart/templates/role-writer.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  creationTimestamp: null
+  name: ack-ec2-ec2-chart-writer
+  namespace: ack-system
+  labels:
+    app.kubernetes.io/name: ec2-chart
+    app.kubernetes.io/instance: ack-ec2
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.18.4"
+    k8s-app: ec2-chart
+    helm.sh/chart: ec2-chart-1.18.4
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+rules:
+  - apiGroups:
+      - ec2.services.k8s.aws
+    resources:
+      - capacityreservations
+      - dhcpoptions
+      - egressonlyinternetgateways
+      - elasticipaddresses
+      - flowlogs
+      - instances
+      - internetgateways
+      - launchtemplates
+      - managedprefixlists
+      - natgateways
+      - networkacls
+      - routetables
+      - securitygroups
+      - subnets
+      - transitgateways
+      - transitgatewayvpcattachments
+      - vpcs
+      - vpcendpoints
+      - vpcendpointserviceconfigurations
+      - vpcpeeringconnections
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - ec2.services.k8s.aws
+    resources:
+      - capacityreservations
+      - dhcpoptions
+      - egressonlyinternetgateways
+      - elasticipaddresses
+      - flowlogs
+      - instances
+      - internetgateways
+      - launchtemplates
+      - managedprefixlists
+      - natgateways
+      - networkacls
+      - routetables
+      - securitygroups
+      - subnets
+      - transitgateways
+      - transitgatewayvpcattachments
+      - vpcs
+      - vpcendpoints
+      - vpcendpointserviceconfigurations
+      - vpcpeeringconnections
+    verbs:
+      - get
+      - patch
+      - update
+---
+# Source: ec2-chart/templates/caches-role-binding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ack-ec2-ec2-chart-configmaps-cache
+  namespace: ack-system
+  labels:
+    app.kubernetes.io/name: ec2-chart
+    app.kubernetes.io/instance: ack-ec2
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.18.4"
+    k8s-app: ec2-chart
+    helm.sh/chart: ec2-chart-1.18.4
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+roleRef:
+  kind: Role
+  apiGroup: rbac.authorization.k8s.io
+  name: ack-ec2-ec2-chart-configmaps-cache
+subjects:
+  - kind: ServiceAccount
+    name: ack-ec2-controller
+    namespace: ack-system
+---
+# Source: ec2-chart/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ack-ec2-ec2-chart
+  namespace: ack-system
+  labels:
+    app.kubernetes.io/name: ec2-chart
+    app.kubernetes.io/instance: ack-ec2
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.18.4"
+    k8s-app: ec2-chart
+    helm.sh/chart: ec2-chart-1.18.4
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ec2-chart
+      app.kubernetes.io/instance: ack-ec2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ec2-chart
+        app.kubernetes.io/instance: ack-ec2
+        app.kubernetes.io/managed-by: Helm
+        k8s-app: ec2-chart
+    spec:
+      serviceAccountName: ack-ec2-controller
+      containers:
+        - command:
+            - ./bin/controller
+          args:
+            - --aws-region
+            - "$(AWS_REGION)"
+            - --aws-endpoint-url
+            - "$(AWS_ENDPOINT_URL)"
+            - --log-level
+            - "$(ACK_LOG_LEVEL)"
+            - --resource-tags
+            - "$(ACK_RESOURCE_TAGS)"
+            - --watch-namespace
+            - "$(ACK_WATCH_NAMESPACE)"
+            - --watch-selectors
+            - "$(ACK_WATCH_SELECTORS)"
+            - --reconcile-resources
+            - "$(RECONCILE_RESOURCES)"
+            - --deletion-policy
+            - "$(DELETION_POLICY)"
+            - --reconcile-default-resync-seconds
+            - "$(RECONCILE_DEFAULT_RESYNC_SECONDS)"
+            - --reconcile-default-max-concurrent-syncs
+            - "$(RECONCILE_DEFAULT_MAX_CONCURRENT_SYNCS)"
+            - --feature-gates
+            - "$(FEATURE_GATES)"
+            - --enable-carm=true
+            - --enable-cross-namespace=true
+          image: public.ecr.aws/aws-controllers-k8s/ec2-controller:1.18.4
+          imagePullPolicy: IfNotPresent
+          name: controller
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            limits:
+              cpu: 100m
+              memory: 128Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          env:
+            - name: ACK_SYSTEM_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: AWS_REGION
+              value: us-west-2
+            - name: AWS_ENDPOINT_URL
+              value: ""
+            - name: AWS_IDENTITY_ENDPOINT_URL
+              value: ""
+            - name: ACK_WATCH_NAMESPACE
+              value:
+            - name: ACK_WATCH_SELECTORS
+              value:
+            - name: RECONCILE_RESOURCES
+              value: "CapacityReservation,DHCPOptions,EgressOnlyInternetGateway,ElasticIPAddress,FlowLog,Instance,InternetGateway,LaunchTemplate,ManagedPrefixList,NATGateway,NetworkACL,RouteTable,SecurityGroup,Subnet,TransitGateway,TransitGatewayVPCAttachment,VPC,VPCEndpoint,VPCEndpointServiceConfiguration,VPCPeeringConnection"
+            - name: DELETION_POLICY
+              value: retain
+            - name: LEADER_ELECTION_NAMESPACE
+              value: ""
+            - name: ACK_LOG_LEVEL
+              value: "info"
+            - name: ACK_RESOURCE_TAGS
+              value: "services.k8s.aws/controller-version=%CONTROLLER_SERVICE%-%CONTROLLER_VERSION%,services.k8s.aws/namespace=%K8S_NAMESPACE%,app.kubernetes.io/managed-by=%MANAGED_BY%,kro.run/kro-version=%KRO_VERSION%"
+            - name: RECONCILE_DEFAULT_RESYNC_SECONDS
+              value: "36000"
+            - name: RECONCILE_DEFAULT_MAX_CONCURRENT_SYNCS
+              value: "1"
+            - name: FEATURE_GATES
+              value: IAMRoleSelector=false,ReadOnlyResources=true,ResourceAdoption=true,ServiceLevelCARM=false,TeamLevelCARM=false
+            - name: AWS_SHARED_CREDENTIALS_FILE
+              value: /var/run/secrets/aws/credentials
+            - name: AWS_PROFILE
+              value: default
+          volumeMounts:
+            - name: aws-creds
+              mountPath: /var/run/secrets/aws
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 10
+      nodeSelector:
+        kubernetes.io/os: linux
+      hostIPC: false
+      hostPID: false
+      hostNetwork: false
+      dnsPolicy: ClusterFirst
+      volumes:
+        - name: aws-creds
+          secret:
+            secretName: aws-creds

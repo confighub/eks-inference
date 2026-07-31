@@ -1,0 +1,51 @@
+# The EKS control plane.
+#
+# Control plane ENIs go in the private subnets. endpointPublicAccess stays true
+# so you can reach the API server from your laptop to run `cub cluster adopt`
+# against it — with it false, the adopt step would need a bastion or VPN.
+#
+# bootstrapSelfManagedAddons is left at its default (true), so EKS installs
+# vpc-cni, coredns, and kube-proxy itself. Declaring those as ACK Addon
+# resources as well would mean two controllers reconciling the same objects;
+# only eks-pod-identity-agent — which EKS does NOT install by default — is
+# declared explicitly, in addons.yaml.
+apiVersion: eks.services.k8s.aws/v1alpha1
+kind: Cluster
+metadata:
+  name: inference-demo
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  name: inference-demo
+  version: "1.33"
+  roleRef:
+    from:
+      name: inference-demo-cluster-role
+  resourcesVPCConfig:
+    subnetRefs:
+      - from:
+          name: inference-demo-private-a
+      - from:
+          name: inference-demo-private-b
+      - from:
+          name: inference-demo-private-c
+    securityGroupRefs:
+      - from:
+          name: inference-demo-cluster-sg
+    endpointPrivateAccess: true
+    endpointPublicAccess: true
+  accessConfig:
+    # API_AND_CONFIG_MAP rather than API alone: the managed nodegroup still
+    # relies on the aws-auth ConfigMap path in some EKS versions, and dropping
+    # to API-only can leave nodes unable to join with no obvious signal.
+    authenticationMode: API_AND_CONFIG_MAP
+    # Whoever's credentials the ACK controller uses becomes cluster admin. That
+    # is what makes the cluster reachable for `cub cluster adopt` immediately
+    # after it comes up, with no second access-entry round trip.
+    bootstrapClusterCreatorAdminPermissions: true
+  # NOTE: the EKS service models tags as a map, while EC2 and IAM model them as
+  # a list of {key, value}. Same word, two shapes, in the same stack. Getting it
+  # wrong is a strict-decoding rejection at apply time, not a schema warning.
+  tags:
+    eks-inference.confighub.com/stack: inference-demo

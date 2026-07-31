@@ -1,0 +1,74 @@
+# The component set: what exists, which cluster applies it, and in what order.
+#
+# Single source of truth. scripts/render.sh, scripts/deploy.sh, and the Makefile
+# all read this rather than each keeping their own list — a component added in
+# one place and forgotten in another is exactly the class of bug that leaves a
+# stale file in configs/ or an undeployed space.
+#
+# plane
+#   hub       lives only in ConfigHub. Never bound to a Target, never released,
+#             never applied to any cluster. Holds values other components link
+#             to. deploy.sh creates its variant but publishes nothing.
+#   mgmt      applied by the local kind cluster (`cub cluster up`). Creates AWS
+#             infrastructure through ACK. Never moves.
+#   workload  applied by the EKS cluster itself, once enrolled
+#             (`scripts/cluster-enroll.sh`). Owns everything that runs on it.
+#
+# order
+#   Deployment order *within* a plane. Ordering BETWEEN planes is the sequencing
+#   problem Argo sync waves cannot express — the whole mgmt plane must converge
+#   before the workload plane is deployed. See docs/dependencies.md.
+#
+# render
+#   ack-charts  helm template of the three ACK controller charts
+#   helm        helm template of a single chart (see scripts/render.sh)
+#   copy        handwritten YAML in src/<name>/, copied verbatim
+
+components:
+  - name: platform-profile
+    plane: hub
+    order: 0
+    render: copy
+    description: Values every other component must agree on; never applied to a cluster
+
+  - name: ack-controllers
+    plane: mgmt
+    order: 0
+    render: ack-charts
+    description: ACK EC2, IAM, and EKS controllers and their CRDs
+
+  - name: aws-network
+    plane: mgmt
+    order: 1
+    render: copy
+    description: VPC, subnets, NAT, route tables, security group
+
+  - name: eks-cluster
+    plane: mgmt
+    order: 2
+    render: copy
+    description: Cluster and node IAM roles, EKS control plane, addons, system nodegroup
+
+  - name: karpenter-aws
+    plane: mgmt
+    order: 3
+    render: copy
+    description: Karpenter controller IAM role and EKS Pod Identity association
+
+  - name: karpenter
+    plane: workload
+    order: 0
+    render: helm
+    description: Karpenter CRDs, controller, NodePools, and EC2NodeClasses
+
+  - name: gpu-runtime
+    plane: workload
+    order: 1
+    render: helm
+    description: NVIDIA Kubernetes device plugin, so GPU nodes advertise nvidia.com/gpu
+
+  - name: inference-workloads
+    plane: workload
+    order: 2
+    render: copy
+    description: GPU smoke test and a sample vLLM inference deployment

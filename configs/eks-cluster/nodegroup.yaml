@@ -1,0 +1,47 @@
+# The system nodegroup: small, cheap, arm64, and always on.
+#
+# It exists to run the things that must be running before Karpenter can run —
+# Karpenter's own controller, CoreDNS, and the pod identity agent. Karpenter
+# cannot schedule the node that Karpenter runs on, so this managed nodegroup is
+# the floor the rest of the stack stands on.
+#
+# t4g.medium is Graviton, so this is an ARM64 node pool. Everything scheduled
+# here must have arm64 images — Karpenter, CoreDNS, and the pod identity agent
+# all publish multi-arch manifests, but a chart that does not will CrashLoop
+# with an exec format error rather than fail to schedule.
+apiVersion: eks.services.k8s.aws/v1alpha1
+kind: Nodegroup
+metadata:
+  name: inference-demo-system
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "11"
+spec:
+  name: system
+  clusterRef:
+    from:
+      name: inference-demo
+  nodeRoleRef:
+    from:
+      name: inference-demo-node-role
+  subnetRefs:
+    - from:
+        name: inference-demo-private-a
+    - from:
+        name: inference-demo-private-b
+    - from:
+        name: inference-demo-private-c
+  instanceTypes:
+    - t4g.medium
+  amiType: AL2023_ARM_64_STANDARD
+  capacityType: ON_DEMAND
+  diskSize: 40
+  scalingConfig:
+    minSize: 2
+    maxSize: 4
+    desiredSize: 2
+  labels:
+    eks-inference.confighub.com/pool: system
+  # EKS tags are a map, not a {key, value} list — see cluster.yaml.
+  tags:
+    eks-inference.confighub.com/stack: inference-demo

@@ -1,0 +1,13 @@
+# ACK custom resources are namespaced. Keeping the AWS resources in their own
+# namespace (rather than alongside the controllers in ack-system) means
+# `kubectl get vpc,subnet,natgateway -n aws-inference` is a clean inventory of
+# what this stack owns in AWS.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aws-inference
+  labels:
+    app.kubernetes.io/managed-by: confighub
+    eks-inference.confighub.com/component: aws-network
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"

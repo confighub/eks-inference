@@ -1,0 +1,44 @@
+# Tier 2 proof: does the general NodePool actually provision a node?
+#
+# SHIPS AT replicas: 0. Installing this component must never launch an instance —
+# otherwise `cub release publish` on the workload plane immediately starts
+# spending money. Scaling is the deliberate act:
+#
+#   cub function do --space inference-workloads-dev --where "Slug = 'smoke-cpu'" \
+#     set-replicas 1
+#   cub release publish inference-workloads-dev
+#
+# NOT `kubectl scale`. The Argo Application syncs with selfHeal: true, so the
+# config is authoritative and a manual scale is reverted within a minute — it
+# reports success and then silently undoes itself.
+#
+# Costs roughly $0.02/hour on spot while it is up.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: smoke-cpu
+  namespace: inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  replicas: 0
+  selector:
+    matchLabels: { app: smoke-cpu }
+  template:
+    metadata:
+      labels: { app: smoke-cpu }
+    spec:
+      # No GPU toleration, so this can only ever land on the general pool.
+      nodeSelector:
+        eks-inference.confighub.com/pool: general
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              # Larger than a single t4g.medium (2 vCPU) can offer, so this
+              # cannot fit on the system nodegroup and Karpenter is forced to
+              # launch a node. A smaller request would schedule on existing
+              # capacity and prove nothing.
+              cpu: "3"
+              memory: 2Gi

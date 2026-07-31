@@ -1,0 +1,17 @@
+# The namespace every inference workload lands in.
+#
+# Its own file, deliberately. An earlier version declared it inside
+# smoke-cpu.yaml, and ConfigHub's link inference immediately exposed the
+# consequence: smoke-gpu and vllm-qwen both acquired a dependency edge on the
+# *smoke test* unit, because that is where the Namespace they reference lived.
+# Deleting a throwaway smoke test would have taken the namespace, and therefore
+# the real workloads, with it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: inference
+  labels:
+    app.kubernetes.io/managed-by: confighub
+    eks-inference.confighub.com/component: inference-workloads
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"

@@ -1,0 +1,126 @@
+# EC2NodeClasses: HOW a node is built. NodePools (nodepools.yaml) decide WHEN and
+# WHAT SIZE; these decide the AMI, disk, IAM role, and which subnets and security
+# groups to launch into.
+#
+# THIS IS WHERE THE CROSS-COMPONENT CONTRACT LANDS.
+#
+# subnetSelectorTerms and securityGroupSelectorTerms match on
+# karpenter.sh/discovery = "inference-demo-net", a tag written by the
+# aws-network component in a different plane, a different bundle, and a
+# different ConfigHub Space. Nothing validates that the two agree. If they ever
+# diverge, Karpenter finds no subnets and simply never launches a node — there
+# is no error that names the tag.
+#
+# The value is the NETWORK identifier, not the cluster name. See
+# docs/dependencies.md.
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: general
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  # A role NAME, not an ARN. Karpenter creates and manages the instance profile
+  # for it — which is why karpenter-aws grants iam:CreateInstanceProfile.
+  # This is the same node role the system nodegroup uses, created by eks-cluster.
+  role: inference-demo-node-role
+
+  # latest is fine HERE: drift on a CPU pool is a cheap rolling replacement.
+  # Contrast with the gpu NodeClass below, which is pinned.
+  amiSelectorTerms:
+    - alias: al2023@latest
+
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: inference-demo-net
+  # TWO terms, and both are required.
+  #
+  # Our own SG carries the discovery tag and the intra-VPC allow. But EKS also
+  # creates a managed "cluster security group" and attaches it to managed
+  # nodegroup nodes — where CoreDNS runs. Its only ingress rule permits traffic
+  # FROM ITSELF, so a node carrying just our SG cannot reach any pod on a
+  # managed nodegroup node.
+  #
+  # The symptom is not an obvious network error: the node registers fine (the
+  # API server ENIs do carry our SG), images pull fine (that is the kubelet on
+  # the host), and then the first pod that needs DNS fails with
+  # "Temporary failure in name resolution" because it cannot reach CoreDNS.
+  #
+  # Passing a custom SG in the cluster's resourcesVPCConfig ADDS to the managed
+  # cluster SG, it does not replace it — so Karpenter nodes have to select both.
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: inference-demo-net
+    - tags:
+        kubernetes.io/cluster/inference-demo: owned
+
+  tags:
+    eks-inference.confighub.com/stack: inference-demo
+    eks-inference.confighub.com/nodeclass: general
+---
+# GPU nodes: pinned AMI, large disk, and capacity reservations made available.
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: gpu
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  role: inference-demo-node-role
+
+  # PINNED, unlike the general NodeClass. A new EKS AMI release would otherwise
+  # make every GPU node drift, and Karpenter would recycle them — swapping the
+  # NVIDIA driver under a running model, and destroying H200 capacity that may
+  # have taken a reservation to obtain. Bump GPU_AMI_ALIAS in versions.env
+  # deliberately, after checking CUDA compatibility.
+  #
+  # NOTE: this alias is a literal here but is owned by versions.env. Keeping the
+  # two in step is currently manual — a good candidate for the platform-profile
+  # link work.
+  amiSelectorTerms:
+    - alias: al2023@v20260724
+
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: inference-demo-net
+  # TWO terms, and both are required.
+  #
+  # Our own SG carries the discovery tag and the intra-VPC allow. But EKS also
+  # creates a managed "cluster security group" and attaches it to managed
+  # nodegroup nodes — where CoreDNS runs. Its only ingress rule permits traffic
+  # FROM ITSELF, so a node carrying just our SG cannot reach any pod on a
+  # managed nodegroup node.
+  #
+  # The symptom is not an obvious network error: the node registers fine (the
+  # API server ENIs do carry our SG), images pull fine (that is the kubelet on
+  # the host), and then the first pod that needs DNS fails with
+  # "Temporary failure in name resolution" because it cannot reach CoreDNS.
+  #
+  # Passing a custom SG in the cluster's resourcesVPCConfig ADDS to the managed
+  # cluster SG, it does not replace it — so Karpenter nodes have to select both.
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: inference-demo-net
+    - tags:
+        kubernetes.io/cluster/inference-demo: owned
+
+  # GPU AMIs carry the NVIDIA driver and container toolkit, and model weights are
+  # large. The 20Gi default fills before a 7B model finishes pulling.
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 200Gi
+        volumeType: gp3
+        deleteOnTermination: true
+
+  # Makes any On-Demand Capacity Reservation tagged for this stack usable by
+  # NodePools that allow karpenter.sh/capacity-type: reserved — which is how the
+  # h200 pool gets capacity at all. Harmless for the quantized pool, which does
+  # not permit the reserved capacity type.
+  capacityReservationSelectorTerms:
+    - tags:
+        eks-inference.confighub.com/stack: inference-demo
+
+  tags:
+    eks-inference.confighub.com/stack: inference-demo
+    eks-inference.confighub.com/nodeclass: gpu

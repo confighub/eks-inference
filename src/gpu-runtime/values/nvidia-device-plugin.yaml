@@ -1,0 +1,40 @@
+# NVIDIA Kubernetes device plugin.
+#
+# WHY THIS COMPONENT EXISTS: the EKS-optimized AL2023 accelerated AMIs ship the
+# NVIDIA driver and container toolkit but NOT the device plugin. Without it no
+# node ever advertises the nvidia.com/gpu extended resource, so a pod requesting
+# a GPU stays Pending forever — and Karpenter, seeing an unschedulable pod it
+# cannot satisfy, will not launch a node either. The failure looks like
+# "Karpenter is broken" and is nothing of the sort.
+#
+# It is a separate component from `karpenter` because the two are independently
+# useful: Karpenter without this for CPU-only pools, this without Karpenter on
+# managed nodegroups. It is separate from `inference-workloads` because it is
+# platform — deleting your models must not stop GPUs being schedulable.
+
+# The GPU NodePools taint every node they create. The plugin is a DaemonSet and
+# has to run ON those nodes, so it must tolerate the taints — including the
+# H200-specific one. A plugin that does not tolerate them never runs, the node
+# never advertises its GPUs, and the node sits idle and expensive.
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+  - key: eks-inference.confighub.com/h200
+    operator: Exists
+    effect: NoSchedule
+
+# Only schedule where there is actually NVIDIA hardware. Without this the
+# DaemonSet lands on every node, including the arm64 system nodegroup, and
+# crash-loops where there is no GPU to manage.
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: eks-inference.confighub.com/accelerator
+              operator: Exists
+
+# Fail loudly rather than quietly degrade if the driver is missing or the NVML
+# library cannot be loaded — the most common symptom of an AMI/plugin mismatch.
+failOnInitError: true

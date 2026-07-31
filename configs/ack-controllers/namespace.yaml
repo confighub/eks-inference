@@ -1,0 +1,16 @@
+# The namespace every ACK controller runs in, plus the credentials Secret's
+# expected shape.
+#
+# The Secret itself is NOT here and never will be. `cub variant upload` refuses
+# to upload rendered Secrets, and AWS access keys have no business in a config
+# bundle that is published to a public registry. It is applied out of band —
+# see docs/aws-credentials.md.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ack-system
+  labels:
+    app.kubernetes.io/managed-by: confighub
+    eks-inference.confighub.com/component: ack-controllers
+  annotations:
+    argocd.argoproj.io/sync-wave: "-30"

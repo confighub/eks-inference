@@ -1,0 +1,100 @@
+# The actual payload: a quantized 7B model served by vLLM on one L4.
+#
+# This is what the quantized-gpu pool exists for. Qwen2.5-7B-Instruct-AWQ is
+# 4-bit AWQ quantized — roughly 5.5GB of weights, comfortable in the 24GB of an
+# L4 or A10G with room for a large KV cache. It is openly downloadable, so no
+# Hugging Face token is needed; a gated model would need one wired in as a Secret
+# out of band, the same way AWS credentials are.
+#
+# SHIPS AT replicas: 0.
+#   cub function do --space inference-workloads-dev --where "Slug = 'vllm-qwen'" \
+#     set-replicas 1
+#   cub release publish inference-workloads-dev
+#   kubectl port-forward -n inference svc/vllm-qwen 8000:8000
+#   curl localhost:8000/v1/models
+#
+# Expect several minutes before it serves: Karpenter launches a node (~60s), the
+# node pulls a multi-GB vLLM image, then vLLM downloads the model. The 200Gi disk
+# on the gpu NodeClass exists for exactly this.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-qwen
+  namespace: inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
+spec:
+  replicas: 0
+  selector:
+    matchLabels: { app: vllm-qwen }
+  template:
+    metadata:
+      labels: { app: vllm-qwen }
+    spec:
+      nodeSelector:
+        eks-inference.confighub.com/pool: quantized-gpu
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.11.0
+          args:
+            - --model=Qwen/Qwen2.5-7B-Instruct-AWQ
+            # Quantization is deliberately NOT specified. vLLM reads
+            # quantization_config from the model and picks the best kernel for
+            # the hardware — awq_marlin on an L4 (Ada, sm_89), which is markedly
+            # faster than the generic awq path. Passing --quantization=awq
+            # explicitly forces the slower kernel.
+            - --max-model-len=8192
+            # An L4 has 24GB but the device plugin exposes the whole GPU; leave
+            # headroom rather than letting vLLM claim 100% and OOM on a long
+            # context.
+            - --gpu-memory-utilization=0.90
+            - --port=8000
+          ports:
+            - containerPort: 8000
+              name: http
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+          # Model download plus CUDA graph capture is slow. A startup probe with
+          # a generous budget keeps the liveness probe from killing it mid-load,
+          # which otherwise produces a CrashLoop that looks like a GPU fault.
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 15
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 30
+          volumeMounts:
+            - name: cache
+              mountPath: /root/.cache/huggingface
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: cache
+          emptyDir: {}
+        # vLLM uses shared memory for tensor parallelism and NCCL; the 64MB
+        # default is far too small and produces obscure crashes.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-qwen
+  namespace: inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
+spec:
+  selector:
+    app: vllm-qwen
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

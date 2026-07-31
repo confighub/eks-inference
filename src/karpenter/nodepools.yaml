@@ -1,0 +1,162 @@
+# NodePools: WHEN to launch a node and WHAT it may be. This is the file you edit
+# most — instance families, capacity types, limits, disruption behaviour — which
+# is why it is its own Unit under --granularity per-file.
+#
+# Three pools, in increasing order of cost and decreasing order of availability:
+#
+#   general        CPU. Spot, broad instance selection, aggressive consolidation.
+#   quantized-gpu  L4 / A10G, 24GB. Spot. The workhorse for quantized 7B-13B.
+#   h200          8x H200 141GB. Reserved capacity only, in practice.
+#
+# All GPU pools are TAINTED. Nothing lands on a GPU node unless it explicitly
+# tolerates nvidia.com/gpu — otherwise ordinary pods would schedule onto a
+# multi-thousand-dollar-a-month machine and hold it up against consolidation.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: general
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  template:
+    metadata:
+      labels:
+        eks-inference.confighub.com/pool: general
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: general
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: [arm64, amd64]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: [spot, on-demand]
+        - key: karpenter.k8s.aws/instance-category
+          operator: In
+          values: [c, m, r, t]
+        # Generation > 4 keeps Karpenter away from ancient, poor value families.
+        - key: karpenter.k8s.aws/instance-generation
+          operator: Gt
+          values: ["4"]
+      expireAfter: 720h
+  limits:
+    cpu: "64"
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 1m
+  # Higher weight wins when several pools could satisfy a pod. General is
+  # preferred so that only pods which explicitly tolerate the GPU taint can end
+  # up on GPU hardware.
+  weight: 50
+---
+# The cheap inference pool. L4 (g6) and A10G (g5) both give 24GB of VRAM, which
+# fits a 7B-13B model quantized to 4-bit with room for KV cache. Spot roughly
+# thirds the price; without an interruption queue a reclaim is abrupt, which is
+# a reasonable trade for a demo and for batch-shaped inference.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: quantized-gpu
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  template:
+    metadata:
+      labels:
+        eks-inference.confighub.com/pool: quantized-gpu
+        eks-inference.confighub.com/accelerator: nvidia-l4
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: gpu
+      requirements:
+        - key: karpenter.k8s.aws/instance-family
+          operator: In
+          values: [g6, g6e, g5]
+        # One GPU per node. Larger sizes in these families add GPUs, and a
+        # single quantized model does not need them.
+        - key: karpenter.k8s.aws/instance-size
+          operator: In
+          values: [xlarge, 2xlarge]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: [spot, on-demand]
+        - key: kubernetes.io/arch
+          operator: In
+          values: [amd64]
+      taints:
+        - key: nvidia.com/gpu
+          value: "true"
+          effect: NoSchedule
+      expireAfter: 168h
+  limits:
+    nvidia.com/gpu: "4"
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    # Longer than the general pool: a GPU node takes minutes to come up and pull
+    # a model image, so churning it on brief idleness costs more than it saves.
+    consolidateAfter: 5m
+  weight: 20
+---
+# The expensive pool. p5e/p5en are 8x H200 141GB.
+#
+# THIS WILL USUALLY NOT PROVISION, AND THAT IS EXPECTED. Default P5 on-demand
+# quota is frequently zero, and the capacity is genuinely scarce. It is modelled
+# honestly rather than aspirationally: capacity-type "reserved" is Karpenter's
+# distinct type for On-Demand Capacity Reservations, matched via the gpu
+# NodeClass's capacityReservationSelectorTerms. Tag an ODCR or Capacity Block
+# with eks-inference.confighub.com/stack=inference-demo and this pool will use
+# it; without one it falls back to on-demand and will most likely fail on quota.
+#
+# The configuration is correct either way, which is the point — you can review
+# and promote it without being able to run it.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: h200
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  template:
+    metadata:
+      labels:
+        eks-inference.confighub.com/pool: h200
+        eks-inference.confighub.com/accelerator: nvidia-h200
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: gpu
+      requirements:
+        - key: karpenter.k8s.aws/instance-family
+          operator: In
+          values: [p5e, p5en]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: [reserved, on-demand]
+        - key: kubernetes.io/arch
+          operator: In
+          values: [amd64]
+      taints:
+        - key: nvidia.com/gpu
+          value: "true"
+          effect: NoSchedule
+        # A second, pool-specific taint. Tolerating "any GPU" must not be enough
+        # to land on an H200 — that has to be a deliberate choice in the pod spec.
+        - key: eks-inference.confighub.com/h200
+          value: "true"
+          effect: NoSchedule
+      expireAfter: 168h
+  limits:
+    nvidia.com/gpu: "8"
+  disruption:
+    # WhenEmpty, not WhenEmptyOrUnderutilized: never consolidate a node this
+    # scarce because it looks underused. If you got one, keep it until it is
+    # genuinely idle.
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 10m
+  weight: 1

@@ -1,0 +1,48 @@
+# The single parameter surface for one stack.
+#
+# THIS IS NEVER APPLIED TO A CLUSTER. There is no CRD for PlatformProfile and no
+# controller watching it. It exists only inside ConfigHub, as the upstream that
+# other components' Units link to for values they must agree on. Its Space
+# therefore has no Target and is never released — see `plane: hub` in
+# components.yaml.
+#
+# WHY IT EXISTS: every value below currently appears as a literal in two or more
+# components, in two different apply planes, with nothing checking that the
+# copies agree. The worst is karpenter.sh/discovery, where a mismatch does not
+# error — Karpenter simply finds no subnets and never launches a node.
+#
+# Links from here span planes. Argo sync waves cannot express ordering between
+# the mgmt and workload planes, but a ConfigHub link propagates a VALUE across
+# that boundary without caring which cluster applies either side. Ordering and
+# value propagation are separate problems, and only one of them needs the planes
+# to be reachable from each other.
+apiVersion: eks-inference.confighub.com/v1
+kind: PlatformProfile
+metadata:
+  name: inference-demo
+spec:
+  # The EKS cluster's name. Also the prefix for its IAM roles and the value of
+  # kubernetes.io/cluster/<name> tags.
+  clusterName: inference-demo
+
+  # The NETWORK's identity, deliberately distinct from clusterName. This is the
+  # karpenter.sh/discovery value. Keeping it separate is what allows a second
+  # cluster in the same VPC for a blue/green upgrade — see docs/dependencies.md.
+  networkName: inference-demo-net
+
+  region: us-west-2
+  availabilityZones:
+    - us-west-2a
+    - us-west-2b
+    - us-west-2c
+
+  vpcCIDR: 10.42.0.0/16
+
+  # The node role Karpenter puts on the instances it launches. Created by
+  # eks-cluster, consumed by karpenter's EC2NodeClass in the other plane.
+  nodeRoleName: inference-demo-node-role
+
+  # PINNED GPU AMI. Currently duplicated between versions.env (which documents
+  # how to refresh it) and karpenter/nodeclasses.yaml (which uses it). One of
+  # those two is going to drift from the other.
+  gpuAMIAlias: al2023@v20260724

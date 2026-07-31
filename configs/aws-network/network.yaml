@@ -1,0 +1,361 @@
+# The VPC and everything in it, as one Unit.
+#
+# WHY ONE FILE: with --granularity per-file, file boundaries become Unit
+# boundaries, and Unit boundaries become edges in ConfigHub's inferred link
+# graph. Splitting these resources across files does not just add Units — it
+# invents dependencies between them.
+#
+# Concretely: an earlier split of gateways.yaml + route-tables.yaml + subnets-*
+# produced a cycle that ConfigHub had to break an edge to resolve:
+#
+#   gateways -> subnets-public -> route-tables -> gateways
+#
+# No such cycle exists between the actual resources. NATGateway -> public-a ->
+# public-rt -> igw -> vpc is a clean chain. The cycle was purely an artifact of
+# which resources shared a file.
+#
+# These resources are also created, versioned, and destroyed together — nobody
+# rolls back "just the route tables" — so one Unit is an honest description of
+# their lifecycle rather than a convenience.
+#
+# ORDERING IS NOT LOST: argocd.argoproj.io/sync-wave is a per-resource
+# annotation, so Argo still applies these in the order below regardless of how
+# they are grouped into Units. Resources appear here in topological order and
+# their waves match.
+---
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: VPC
+metadata:
+  name: inference-demo-vpc
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  cidrBlocks:
+    - 10.42.0.0/16
+  # Both are required for EKS: worker nodes resolve the API server endpoint by
+  # DNS, and the in-cluster CoreDNS forwards to the VPC resolver.
+  enableDNSSupport: true
+  enableDNSHostnames: true
+  tags:
+    - key: Name
+      value: inference-demo-vpc
+    - key: eks-inference.confighub.com/stack
+      value: inference-demo
+---
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: InternetGateway
+metadata:
+  name: inference-demo-igw
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  vpcRef:
+    from:
+      name: inference-demo-vpc
+  tags:
+    - key: Name
+      value: inference-demo-igw
+---
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: RouteTable
+metadata:
+  name: inference-demo-public-rt
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  vpcRef:
+    from:
+      name: inference-demo-vpc
+  routes:
+    - destinationCIDRBlock: 0.0.0.0/0
+      gatewayRef:
+        from:
+          name: inference-demo-igw
+  tags:
+    - key: Name
+      value: inference-demo-public-rt
+---
+# Public subnets: /20 each, one per AZ. Carry kubernetes.io/role/elb so the AWS
+# load balancer controller can place internet-facing load balancers here.
+#
+# These are NOT tagged karpenter.sh/discovery — Karpenter should only ever launch
+# nodes into the private subnets. Adding the tag here is a common and expensive
+# mistake: GPU nodes would get public IPs.
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: Subnet
+metadata:
+  name: inference-demo-public-a
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  cidrBlock: 10.42.0.0/20
+  availabilityZone: us-west-2a
+  mapPublicIPOnLaunch: true
+  vpcRef:
+    from:
+      name: inference-demo-vpc
+  routeTableRefs:
+    - from:
+        name: inference-demo-public-rt
+  tags:
+    - key: Name
+      value: inference-demo-public-a
+    - key: kubernetes.io/role/elb
+      value: "1"
+---
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: Subnet
+metadata:
+  name: inference-demo-public-b
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  cidrBlock: 10.42.16.0/20
+  availabilityZone: us-west-2b
+  mapPublicIPOnLaunch: true
+  vpcRef:
+    from:
+      name: inference-demo-vpc
+  routeTableRefs:
+    - from:
+        name: inference-demo-public-rt
+  tags:
+    - key: Name
+      value: inference-demo-public-b
+    - key: kubernetes.io/role/elb
+      value: "1"
+---
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: Subnet
+metadata:
+  name: inference-demo-public-c
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  cidrBlock: 10.42.32.0/20
+  availabilityZone: us-west-2c
+  mapPublicIPOnLaunch: true
+  vpcRef:
+    from:
+      name: inference-demo-vpc
+  routeTableRefs:
+    - from:
+        name: inference-demo-public-rt
+  tags:
+    - key: Name
+      value: inference-demo-public-c
+    - key: kubernetes.io/role/elb
+      value: "1"
+---
+# Egress for the private subnets: one NAT gateway in the first public subnet.
+# One, not three — a NAT gateway is ~$33/month plus data processing, and
+# three-AZ NAT redundancy is not worth it for a demo stack. Production would put
+# one per AZ; that is a variant change, not a rewrite.
+#
+# Wave 5, AFTER the public subnets at wave 4. An earlier version had the NAT
+# gateway at wave 3, before the subnet it has to live in — the resource-level
+# ordering was simply wrong, and grouping it with the internet gateway (which
+# genuinely can go early) hid that.
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: ElasticIPAddress
+metadata:
+  name: inference-demo-nat-eip
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  tags:
+    - key: Name
+      value: inference-demo-nat-eip
+---
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: NATGateway
+metadata:
+  name: inference-demo-natgw
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  # Must live in a PUBLIC subnet — a NAT gateway in a private subnet has no
+  # route to the internet and silently blackholes egress.
+  subnetRef:
+    from:
+      name: inference-demo-public-a
+  allocationRef:
+    from:
+      name: inference-demo-nat-eip
+  tags:
+    - key: Name
+      value: inference-demo-natgw
+---
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: RouteTable
+metadata:
+  name: inference-demo-private-rt
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  vpcRef:
+    from:
+      name: inference-demo-vpc
+  routes:
+    - destinationCIDRBlock: 0.0.0.0/0
+      natGatewayRef:
+        from:
+          name: inference-demo-natgw
+  tags:
+    - key: Name
+      value: inference-demo-private-rt
+---
+# Private subnets: /20 each, one per AZ, egress via the NAT gateway. Every
+# workload node — system, quantized-GPU, and H200 — lands here.
+#
+# THE karpenter.sh/discovery TAG IS A CROSS-COMPONENT CONTRACT.
+#
+# Its value must equal the subnetSelectorTerms and securityGroupSelectorTerms
+# values in the EC2NodeClass that the karpenter component will ship. Two
+# components, one string, no compiler to catch a typo — Karpenter simply finds no
+# subnets and never launches a node, with no error that points at the tag.
+#
+# THE VALUE IS A *NETWORK* IDENTIFIER, NOT THE CLUSTER NAME.
+#
+# The usual convention is karpenter.sh/discovery: <cluster-name>, which is
+# convenient when one cluster owns one VPC. It is wrong here: these subnets
+# belong to the network, and aws-network and eks-cluster are separate components
+# precisely so a second cluster can be stood up in the same VPC for a blue/green
+# version upgrade. Tagged with a cluster name, both clusters' Karpenters would
+# match the same selector by accident rather than by design.
+#
+# Today it is a literal. It is the first value that becomes a ConfigHub link
+# from the platform-profile Unit. See docs/dependencies.md.
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: Subnet
+metadata:
+  name: inference-demo-private-a
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "7"
+spec:
+  cidrBlock: 10.42.64.0/20
+  availabilityZone: us-west-2a
+  vpcRef:
+    from:
+      name: inference-demo-vpc
+  routeTableRefs:
+    - from:
+        name: inference-demo-private-rt
+  tags:
+    - key: Name
+      value: inference-demo-private-a
+    - key: kubernetes.io/role/internal-elb
+      value: "1"
+    - key: karpenter.sh/discovery
+      value: inference-demo-net
+---
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: Subnet
+metadata:
+  name: inference-demo-private-b
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "7"
+spec:
+  cidrBlock: 10.42.80.0/20
+  availabilityZone: us-west-2b
+  vpcRef:
+    from:
+      name: inference-demo-vpc
+  routeTableRefs:
+    - from:
+        name: inference-demo-private-rt
+  tags:
+    - key: Name
+      value: inference-demo-private-b
+    - key: kubernetes.io/role/internal-elb
+      value: "1"
+    - key: karpenter.sh/discovery
+      value: inference-demo-net
+---
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: Subnet
+metadata:
+  name: inference-demo-private-c
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "7"
+spec:
+  cidrBlock: 10.42.96.0/20
+  availabilityZone: us-west-2c
+  vpcRef:
+    from:
+      name: inference-demo-vpc
+  routeTableRefs:
+    - from:
+        name: inference-demo-private-rt
+  tags:
+    - key: Name
+      value: inference-demo-private-c
+    - key: kubernetes.io/role/internal-elb
+      value: "1"
+    - key: karpenter.sh/discovery
+      value: inference-demo-net
+---
+# Cluster security group. EKS also creates its own managed cluster SG; this one
+# is passed to resourcesVPCConfig so we control node-to-node and node-to-API
+# traffic explicitly rather than inheriting whatever the managed default is.
+#
+# Carries karpenter.sh/discovery for the same reason the private subnets do:
+# EC2NodeClass.securityGroupSelectorTerms finds it by tag.
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: SecurityGroup
+metadata:
+  name: inference-demo-cluster-sg
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "8"
+spec:
+  name: inference-demo-cluster-sg
+  description: Shared node and control plane security group for inference-demo
+  vpcRef:
+    from:
+      name: inference-demo-vpc
+  ingressRules:
+    # Unrestricted traffic within the VPC covers node-to-node, kubelet, and
+    # CNI pod-to-pod. Tightening this is a reasonable variant; it is not the
+    # thing this stack is trying to teach.
+    - ipProtocol: "-1"
+      ipRanges:
+        - cidrIP: 10.42.0.0/16
+          description: intra-VPC
+  # EGRESS MUST BE DECLARED EXPLICITLY.
+  #
+  # AWS creates every new security group with an implicit allow-all egress rule.
+  # ACK reconciles the group to match this spec, so declaring no egressRules
+  # DELETES that default — leaving a group that permits nothing outbound.
+  #
+  # The failure is silent and confusing: instances launch and run, but cannot
+  # reach the EKS API endpoint, ECR, or S3, so kubelet never registers the node.
+  # Karpenter reports Launched=True and Registered=Unknown/NodeNotFound forever,
+  # which reads like a Karpenter problem and is not one.
+  #
+  # Managed nodegroups do not hit this, because EKS attaches its own cluster
+  # security group to them. Karpenter nodes get only what
+  # securityGroupSelectorTerms matches — this group — so this group has to be
+  # complete on its own.
+  egressRules:
+    - ipProtocol: "-1"
+      ipRanges:
+        - cidrIP: 0.0.0.0/0
+          description: allow all outbound
+  tags:
+    - key: Name
+      value: inference-demo-cluster-sg
+    - key: karpenter.sh/discovery
+      value: inference-demo-net

@@ -1,0 +1,65 @@
+# Tier 3 proof: the whole GPU path, for pennies.
+#
+# Scaling this to 1 exercises everything the expensive stack depends on:
+#   - the quantized-gpu NodePool selects a g6/g5 instance
+#   - the gpu EC2NodeClass resolves the PINNED NVIDIA AMI
+#   - the node comes up with the NVIDIA driver
+#   - gpu-runtime's DaemonSet tolerates the taint and lands on it
+#   - the node advertises nvidia.com/gpu
+#   - this pod schedules against that resource and sees the GPU
+#
+# Roughly $0.25-0.35/hour on spot — about 8 cents for a 15 minute check.
+#
+# SHIPS AT replicas: 0.
+#   cub function do --space inference-workloads-dev --where "Slug = 'smoke-gpu'" \
+#     set-replicas 1
+#   cub release publish inference-workloads-dev
+#   kubectl logs -n inference deploy/smoke-gpu     # nvidia-smi output
+#
+# Scale back down the same way. NOT `kubectl scale` — Argo's selfHeal reverts it.
+#
+# IF IT STAYS Pending AND NO NODE APPEARS, suspect gpu-runtime rather than
+# Karpenter: with no device plugin nothing advertises nvidia.com/gpu, so the pod
+# is unschedulable in a way Karpenter cannot fix by adding a node, and it will
+# correctly decline to launch one.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: smoke-gpu
+  namespace: inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  replicas: 0
+  selector:
+    matchLabels: { app: smoke-gpu }
+  template:
+    metadata:
+      labels: { app: smoke-gpu }
+    spec:
+      # Explicitly the cheap pool. The h200 pool carries a second taint this
+      # does not tolerate, so it cannot land there — but naming the pool means
+      # it cannot happen by accident either.
+      nodeSelector:
+        eks-inference.confighub.com/pool: quantized-gpu
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: nvidia-smi
+          image: nvidia/cuda:12.6.2-base-ubuntu22.04
+          command: ["/bin/sh", "-c"]
+          # Print the GPU once, then idle so the pod stays Running and the node
+          # stays up long enough to inspect.
+          args:
+            - |
+              nvidia-smi
+              echo "GPU smoke test OK; idling."
+              sleep infinity
+          resources:
+            limits:
+              # Requesting the extended resource is what forces this onto a GPU
+              # node. It is a limit, not a request — Kubernetes requires
+              # extended resources to be specified as limits.
+              nvidia.com/gpu: 1

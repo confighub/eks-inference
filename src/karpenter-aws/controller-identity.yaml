@@ -1,0 +1,152 @@
+# Karpenter's AWS-side identity. This is the mgmt-plane half of Karpenter.
+#
+# KARPENTER SPANS BOTH PLANES. Its controller and NodePools run on the EKS
+# cluster (the `karpenter` component), but the IAM role that controller assumes
+# and the Pod Identity association that binds them are AWS resources, so only the
+# kind cluster can create them through ACK.
+#
+# That split is why `karpenter-aws` is its own component rather than part of
+# either `eks-cluster` or `karpenter`: it is the only piece of Karpenter the
+# management cluster can apply, and it must exist BEFORE the controller starts on
+# EKS or the controller crash-loops without credentials.
+#
+# No sync wave can express that ordering — it crosses two clusters and two Argo
+# instances. Deploy the mgmt plane and let it converge first.
+#
+# Note there is deliberately no SQS interruption queue or EventBridge rules here.
+# Karpenter's interruptionQueue setting is optional; without it you lose graceful
+# spot-reclaim handling but everything works, and including it would mean adding
+# ACK controllers for SQS and EventBridge to the mgmt plane. See docs/karpenter.md.
+apiVersion: iam.services.k8s.aws/v1alpha1
+kind: Role
+metadata:
+  name: inference-demo-karpenter-controller
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
+spec:
+  name: inference-demo-karpenter-controller
+  description: Karpenter controller role for inference-demo (assumed via EKS Pod Identity)
+  # EKS Pod Identity, not IRSA: the principal is the pods.eks.amazonaws.com
+  # service, so there is no OIDC provider to create and no cluster-specific
+  # issuer URL to template into a trust policy. sts:TagSession is required in
+  # addition to sts:AssumeRole — omitting it is a common and confusing failure.
+  assumeRolePolicyDocument: |
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": { "Service": "pods.eks.amazonaws.com" },
+          "Action": ["sts:AssumeRole", "sts:TagSession"]
+        }
+      ]
+    }
+  # Scoped by action, broad by resource. AWS's published Karpenter policy adds
+  # resource and tag conditions (restricting to nodes carrying the cluster's
+  # discovery tag); that is the right thing for a shared account and overkill for
+  # a demo one. See https://karpenter.sh/docs/reference/cloudformation/
+  inlinePolicies:
+    karpenter-controller: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "LaunchAndTerminate",
+            "Effect": "Allow",
+            "Action": [
+              "ec2:RunInstances",
+              "ec2:CreateFleet",
+              "ec2:CreateLaunchTemplate",
+              "ec2:DeleteLaunchTemplate",
+              "ec2:TerminateInstances",
+              "ec2:CreateTags"
+            ],
+            "Resource": "*"
+          },
+          {
+            "Sid": "ReadInstanceAndNetworkState",
+            "Effect": "Allow",
+            "Action": [
+              "ec2:DescribeAvailabilityZones",
+              "ec2:DescribeCapacityReservations",
+              "ec2:DescribeImages",
+              "ec2:DescribeInstances",
+              "ec2:DescribeInstanceTypeOfferings",
+              "ec2:DescribeInstanceTypes",
+              "ec2:DescribeLaunchTemplates",
+              "ec2:DescribeSecurityGroups",
+              "ec2:DescribeSpotPriceHistory",
+              "ec2:DescribeSubnets"
+            ],
+            "Resource": "*"
+          },
+          {
+            "Sid": "ResolveAMIsFromSSM",
+            "Effect": "Allow",
+            "Action": "ssm:GetParameter",
+            "Resource": "*"
+          },
+          {
+            "Sid": "PriceInstanceTypesForConsolidation",
+            "Effect": "Allow",
+            "Action": "pricing:GetProducts",
+            "Resource": "*"
+          },
+          {
+            "Sid": "DiscoverClusterEndpoint",
+            "Effect": "Allow",
+            "Action": "eks:DescribeCluster",
+            "Resource": "*"
+          },
+          {
+            "Sid": "PassNodeRoleToEC2",
+            "Effect": "Allow",
+            "Action": "iam:PassRole",
+            "Resource": "*",
+            "Condition": {
+              "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
+            }
+          },
+          {
+            "Sid": "ManageInstanceProfiles",
+            "Effect": "Allow",
+            "Action": [
+              "iam:AddRoleToInstanceProfile",
+              "iam:CreateInstanceProfile",
+              "iam:DeleteInstanceProfile",
+              "iam:GetInstanceProfile",
+              "iam:RemoveRoleFromInstanceProfile",
+              "iam:TagInstanceProfile"
+            ],
+            "Resource": "*"
+          }
+        ]
+      }
+  tags:
+    - key: eks-inference.confighub.com/stack
+      value: inference-demo
+---
+# Binds the role above to the Karpenter controller's ServiceAccount. The
+# namespace and serviceAccount need not exist yet — this is created from the mgmt
+# plane before the `karpenter` component is ever deployed to EKS, which is the
+# point: the identity is waiting when the controller starts.
+apiVersion: eks.services.k8s.aws/v1alpha1
+kind: PodIdentityAssociation
+metadata:
+  name: inference-demo-karpenter
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "21"
+spec:
+  clusterRef:
+    from:
+      name: inference-demo
+  namespace: kube-system
+  serviceAccount: karpenter
+  roleRef:
+    from:
+      name: inference-demo-karpenter-controller
+  # EKS tags are a map, not a {key, value} list — see eks-cluster/cluster.yaml.
+  tags:
+    eks-inference.confighub.com/stack: inference-demo

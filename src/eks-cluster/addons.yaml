@@ -1,0 +1,31 @@
+# EKS Pod Identity agent.
+#
+# Only this one addon is declared. vpc-cni, coredns, and kube-proxy are
+# installed by EKS itself (see cluster.yaml) and declaring them here as well
+# would put two controllers on the same objects.
+#
+# Pod Identity is how the Karpenter controller will get its AWS credentials in
+# the next phase — it is the modern replacement for IRSA and needs no OIDC
+# provider, no trust policy templating, and no cluster-specific role ARN baked
+# into a chart value. Installing it now means the karpenter component can assume
+# it is present.
+#
+# addonVersion is deliberately omitted: EKS resolves the default version
+# compatible with the cluster's Kubernetes version. Pinning it here would mean a
+# cluster version bump silently installs an incompatible addon.
+apiVersion: eks.services.k8s.aws/v1alpha1
+kind: Addon
+metadata:
+  name: inference-demo-pod-identity-agent
+  namespace: aws-inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "12"
+spec:
+  name: eks-pod-identity-agent
+  clusterRef:
+    from:
+      name: inference-demo
+  resolveConflicts: OVERWRITE
+  # EKS tags are a map, not a {key, value} list — see cluster.yaml.
+  tags:
+    eks-inference.confighub.com/stack: inference-demo

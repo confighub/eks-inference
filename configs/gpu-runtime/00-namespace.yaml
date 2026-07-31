@@ -1,0 +1,19 @@
+# The namespace the device plugin runs in.
+#
+# Declared here rather than relying on Argo's CreateNamespace sync option: the
+# child Applications that `cub variant create` generates do not set it, so a
+# chart rendered into a namespace nobody creates syncs as OutOfSync forever with
+# no obvious cause. Making it config keeps the component self-contained.
+#
+# "gpu-operator" is the NVIDIA convention for GPU components on Kubernetes and is
+# the device plugin chart's default, so the full GPU Operator could later be
+# added alongside without a move.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gpu-operator
+  labels:
+    app.kubernetes.io/managed-by: confighub
+    eks-inference.confighub.com/component: gpu-runtime
+  annotations:
+    argocd.argoproj.io/sync-wave: "-30"

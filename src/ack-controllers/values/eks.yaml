@@ -1,0 +1,20 @@
+# ACK EKS controller — provisions the cluster, its addons, and the system nodegroup.
+#
+# See ec2.yaml for why deletionPolicy is retain. It matters most here: a pruned
+# eks.services.k8s.aws/Cluster would tear down the control plane.
+aws:
+  region: us-west-2
+  credentials:
+    secretName: aws-creds
+    secretKey: credentials
+    profile: default
+
+deletionPolicy: retain
+installScope: cluster
+
+log:
+  level: info
+
+metrics:
+  service:
+    create: false

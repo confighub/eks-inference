@@ -1,0 +1,70 @@
+name: publish-config-bundles
+
+# Every step here is a `make` target. There is deliberately no build logic
+# inlined in this file: if CI can produce a bundle you cannot reproduce locally
+# with the same command, the flattening stops being reviewable — which is the
+# whole reason the rendered output is committed. Keep it that way.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # Runs on PRs too. Two gates:
+  #   make verify  — configs/ matches what the sources render to
+  #   make bundles — the flattening guard (bundles depends on guard)
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.1
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Check configs/ is in sync with sources
+        run: make verify
+
+      - name: Build bundles (runs the flattening guard)
+        run: make bundles
+
+  publish:
+    needs: [verify]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.1
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - uses: oras-project/setup-oras@v1
+
+      - name: Log in to ghcr.io
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            oras login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      - name: Render, guard, package, and push
+        env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}/configs
+        run: make push
