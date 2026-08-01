@@ -17,7 +17,7 @@ cluster.
 ## 2. Install the bundles as component bases
 
 ```bash
-make install
+cub eksinf install
 ```
 
 which is, per component:
@@ -60,11 +60,14 @@ cub target list --space inference-mgmt
 cub release publish aws-network-dev
 ```
 
-> **This step is not yet verified end to end.** Specifically: how each component
-> Space's release is surfaced to Argo as a child Application in
-> `inference-mgmt-argo-apps`, and whether the sync-wave annotations carried on
-> the resources are sufficient to order the three components relative to one
-> another, or whether waves are also needed on the Application Units themselves.
+> **Verified.** `cub variant create --target` auto-creates the child Argo CD
+> Application in the apps Space and republishes it, so there is no separate
+> wiring step. Publishing each component's own release is still required — until
+> you do, the Application points at a bundle that does not exist.
+>
+> What is NOT solved: sync waves order resources *within* one Application. The
+> components are separate Applications syncing independently, so there is no
+> ordering between them.
 >
 > Sync waves order resources *within* an Argo Application. Ordering *between*
 > Applications is a separate concern. Until this is confirmed against a live

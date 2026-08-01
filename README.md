@@ -1,105 +1,130 @@
 # eks-inference
 
-Config bundles that provision an EKS cluster for inference workloads, driven from
-a local kind cluster via [AWS Controllers for Kubernetes](https://aws-controllers-k8s.github.io/community/)
+An EKS cluster for inference workloads, provisioned from a local kind cluster
+through [AWS Controllers for Kubernetes](https://aws-controllers-k8s.github.io/community/)
 (ACK) and managed as data in [ConfigHub](https://confighub.com).
 
-You run `cub cluster up` to get a kind cluster wired to ConfigHub, install these
-components into it, hand it AWS credentials, and a VPC and an EKS cluster appear.
+Karpenter provisions GPU nodes on demand: a quantized-LLM pool on L4/A10G spot,
+and an H200 pool for when you have the capacity reservation to use it.
 
-## Status: step one
+Everything is driven by config. Scaling a model up is a change to a Unit and a
+release, not a `kubectl` command.
 
-This repo currently ships the **provisioning plane** — the components that run in
-kind and create AWS infrastructure:
+## Install
 
-| Component | Bundle | What it creates |
-|---|---|---|
-| `ack-controllers` | `ghcr.io/confighub/configs/eks-inference/ack-controllers` | ACK EC2, IAM, and EKS controllers + their CRDs |
-| `aws-network` | `ghcr.io/confighub/configs/eks-inference/aws-network` | VPC, 3 public + 3 private subnets, IGW, NAT, route tables, security group |
-| `eks-cluster` | `ghcr.io/confighub/configs/eks-inference/eks-cluster` | Cluster and node IAM roles, EKS control plane, pod identity addon, t4g.medium system nodegroup |
-
-Not yet built: the **workload plane** — Karpenter, the inference nodepools
-(quantized-GPU and H200), and the inference runtime. Those target the EKS cluster
-rather than kind, and are gated on being able to adopt EKS as a ConfigHub target.
-
-## Two apply planes
-
-The single fact that shapes this repo: **kind and EKS are different apply
-targets**, and components are separated by which one applies them before they are
-separated by anything else.
-
-```
-  kind cluster (cub cluster up)          AWS                    EKS cluster
-  ─────────────────────────────          ───                    ───────────
-  ack-controllers  ──────────────────▶   VPC, subnets, NAT
-  aws-network      ──────────────────▶   IAM roles
-  eks-cluster      ──────────────────▶   EKS control plane  ──▶  (workload plane
-                                         system nodegroup         lands here)
+```bash
+cub plugin install confighub/eks-inference
+cub eksinf --help
 ```
 
-Ownership is split rather than migrated. kind keeps the provisioning plane
-permanently — those resources change rarely and deleting them is catastrophic.
-The workload plane will belong to EKS from the day it is written. Nothing ever
-moves between planes, so there is no adoption step and no risk of the cluster
-deleting itself.
-
-## Dependencies between components
-
-Three mechanisms, three different times:
-
-| Mechanism | Carries | When |
-|---|---|---|
-| ConfigHub links | names, CIDRs, region, tags, cluster name | config time, in the hub |
-| ACK `*Ref` fields | actual AWS IDs (`vpc-0a1b…`) | runtime, in-cluster |
-| Argo sync waves | apply ordering | apply time |
-
-AWS IDs do not exist at config time, so ConfigHub cannot propagate them — ACK
-resolves object names to IDs itself. What ConfigHub is for here is the values
-that must *agree* across components, of which `karpenter.sh/discovery` is the
-sharpest example. See [docs/dependencies.md](./docs/dependencies.md).
-
-## Prerequisites
-
-- `cub`, `helm`, `yq`, `kubectl`, `kind`, `docker`, `oras`
-- GNU tar (`brew install gnu-tar` on macOS) — only needed to build bundles
-- An AWS account you are willing to create a VPC and an EKS cluster in
-- Docker running locally
+The plugin is the admin tool for this stack. You do not need this repo checked
+out to use it.
 
 ## Quick start
 
 ```bash
-# 1. A kind cluster wired to ConfigHub via Argo CD.
+# 1. A local management cluster, wired to ConfigHub via Argo CD.
 cub cluster up --name inference-mgmt
 
-# 2. Install the three components as ConfigHub bases from their OCI bundles.
-make install
+# 2. Install the component bases from their published OCI bundles.
+cub eksinf install
 
-# 3. Create a downstream variant of each component, bound to the cluster's OCI
-#    target. This also auto-creates the Argo CD Application for each one.
-for c in ack-controllers aws-network eks-cluster; do
-  cub variant create dev "${c}-base" --target inference-mgmt/target
-done
+# 3. The parameter surface. Its Space has no Target and is never deployed.
+cub variant create dev platform-profile-base
 
-# 4. Publish each variant's release. Until you do, the Applications point at a
-#    bundle that does not exist yet.
-for c in ack-controllers aws-network eks-cluster; do
-  cub release publish "${c}-dev"
-done
+# 4. Deploy the management plane. This creates AWS infrastructure.
+cub eksinf deploy --plane mgmt --target inference-mgmt/target
 
-# 5. Give the controllers AWS credentials. This is the one out-of-band step;
+# 5. Give the ACK controllers AWS credentials. The one out-of-band step —
 #    the Secret is never a ConfigHub Unit.
-scripts/aws-creds.sh create-user      # or use-existing, for a quick test
+cub eksinf creds create-user --yes        # or: creds use-existing
 
-# 6. Watch AWS resources converge.
-make creds-status
+# 6. Watch it converge. ~5 min for the network, ~15 for the EKS control plane.
+cub eksinf status
 ```
 
-Expect roughly 15 minutes for the EKS control plane and another 3–5 for the
-nodegroup.
+When the EKS cluster is `ACTIVE`, bring it under management and deploy the
+workload plane onto it:
+
+```bash
+# 7. Enroll EKS: install Argo CD, register a worker and OCI target, bootstrap
+#    the root app-of-apps. Never creates or destroys a cluster.
+cub eksinf enroll cluster --name inference-demo \
+  --eks-cluster inference-demo --region us-west-2
+
+# 8. Deploy Karpenter, the GPU runtime, and the workloads.
+cub eksinf deploy --plane workload --target inference-demo/target
+
+# 9. Give the duplicated values a single owner.
+cub eksinf link-profile
+```
+
+Nothing is running yet beyond the system nodegroup: every workload ships at
+`replicas: 0`, so installing costs nothing. To actually provision a GPU:
+
+```bash
+cub function do --space inference-workloads-dev --where "Slug = 'smoke-gpu'" set-replicas 1
+cub release publish inference-workloads-dev
+```
+
+Karpenter launches a `g6.xlarge` in about 90 seconds. Scale back to `0` and it is
+released. **Do not use `kubectl scale`** — the Argo Application syncs with
+`selfHeal: true`, so a manual scale is reverted within a minute, having reported
+success.
+
+## The two apply planes
+
+The single fact that shapes this repo: **kind and EKS are different apply
+targets.** Components are separated by which cluster applies them before they are
+separated by anything else.
+
+```
+  kind (cub cluster up)              AWS                  EKS (cub eksinf enroll)
+  ─────────────────────              ───                  ──────────────────────
+  ack-controllers  ──────────────▶   VPC, subnets, NAT
+  aws-network      ──────────────▶   IAM roles            karpenter
+  eks-cluster      ──────────────▶   EKS control plane    gpu-runtime
+  karpenter-aws    ──────────────▶   Karpenter IAM        inference-workloads
+```
+
+Ownership is split, never migrated. kind keeps the provisioning plane
+permanently; the workload plane belongs to EKS from the day it is written. Since
+nothing moves between planes there is no adoption step, and no way for the
+cluster to delete itself.
+
+Karpenter is the case that proves the point: its IAM role and Pod Identity
+association are ACK resources only kind can create, while its controller and
+NodePools run on EKS. One component in each plane.
+
+`cub eksinf components` lists them.
+
+## How values cross component boundaries
+
+Three mechanisms, three different times. Choosing the wrong one is the main way
+this goes wrong.
+
+| Mechanism | Carries | When |
+|---|---|---|
+| ConfigHub links | names, CIDRs, tags, AMI aliases | config time, in the hub |
+| ACK `*Ref` fields | actual AWS IDs (`vpc-0a1b…`) | runtime, in-cluster |
+| Argo sync waves | apply ordering | apply time |
+
+AWS IDs do not exist at config time, so ConfigHub cannot propagate them — ACK
+resolves object names to IDs itself. What ConfigHub is for is the values that
+must *agree* across components, of which `karpenter.sh/discovery` is the sharpest
+example: it spans two planes, and a mismatch produces no error at all, just a
+Karpenter that never launches a node.
+
+**Links span the plane boundary; sync waves cannot.** A single edit to the
+`platform-profile` Unit reaches components applied by two different clusters.
+Ordering between planes is not expressible in config — deploy mgmt, let it
+converge, then deploy workload.
+
+See [docs/dependencies.md](./docs/dependencies.md).
 
 ## What this costs
 
-Running continuously, in `us-west-2`, with nothing scheduled on it:
+Idle, in `us-west-2`, with nothing scheduled:
 
 | Resource | Approx. monthly |
 |---|---|
@@ -108,51 +133,66 @@ Running continuously, in `us-west-2`, with nothing scheduled on it:
 | 2 × t4g.medium | $24 |
 | **Total** | **~$130/month** |
 
-This is not a stack to leave running. The GPU nodepools in the workload plane
-will cost considerably more when they scale up.
+GPU nodes are on top of that and only exist while a workload asks for one:
+roughly $0.80/hr for a `g6.xlarge`, and tens of dollars an hour for H200.
 
-Note that the ACK controllers run with `deletionPolicy: retain`, so deleting
-Units or letting Argo prune them does **not** delete the AWS resources. Teardown
-is an explicit operation — see [docs/teardown.md](./docs/teardown.md).
+`cub eksinf status` reports what is running **from EC2, not from Kubernetes** — a
+Node object can outlive its instance, and an unreachable cluster reports zero
+nodes, so kubectl is wrong in both directions.
 
-## Building
+The ACK controllers run with `deletionPolicy: retain`, so deleting Units or
+letting Argo prune them does **not** delete AWS resources. Teardown is deliberate
+— see [docs/teardown.md](./docs/teardown.md).
+
+## Developing this repo
+
+Only needed to change the config itself or cut a release.
 
 ```bash
 make render    # helm charts + handwritten CRs -> configs/
 make verify    # fail if configs/ drifts from sources (CI gate)
 make bundles   # configs/ -> dist/<component>.tar.gz
-make push      # dist/ -> ghcr.io/confighub/configs/eks-inference/<component>:latest
+make push      # -> ghcr.io/confighub/configs/eks-inference/<component>:latest
+make plugin    # build ./eksinf locally
+make check     # go vet + go test + gofmt, as CI runs them
 ```
 
-CI runs exactly these targets — there is no build logic in the workflow file.
+CI runs exactly these targets; there is no build logic in the workflow files.
 
 The rendered output in `configs/` is committed on purpose: it makes a chart
-version bump reviewable as a diff, and it is what the OCI bundles contain.
-See [docs/flattening.md](./docs/flattening.md) for what is lost when a Helm chart
-is flattened into literal YAML, and how the build guards against it.
+version bump reviewable as a diff, and it is what the OCI bundles contain. See
+[docs/flattening.md](./docs/flattening.md) for what is lost when a Helm chart is
+flattened into literal YAML, and how the build guards against it.
 
-## Layout
+Two release cadences, deliberately independent:
+
+- **config bundles** float at `:latest`, republished on every push to `main`
+- **the plugin** is cut from a `v*` tag as a GitHub release
+
+### Layout
 
 ```
+components.yaml           the component set: name, plane, order. Embedded in the plugin.
 versions.env              pinned chart versions and render inputs
-Makefile                  every build entry point
+Makefile                  build entry points
+main.go, embed.go, cmd/   the eksinf plugin
 scripts/render.sh         helm template + copy -> configs/
 scripts/guard.sh          rejects Helm constructs that do not survive flattening
 scripts/bundle.sh         reproducible tarballs + oras push
-scripts/aws-creds.sh      AWS credentials into the cluster (existing, or a new IAM user)
-iam/                      the IAM policy granted to the dedicated user
 src/                      sources: chart values and handwritten ACK resources
 configs/                  rendered output (committed; one file per ConfigHub Unit)
+iam/                      the IAM policy `creds create-user` attaches
 ```
 
-File names in `configs/` are an interface: bundles are installed with
-`cub variant upload --granularity per-file`, so each file becomes one Unit and
-renaming a file renames a Unit.
+File names in `configs/` are an interface: bundles install with
+`--granularity per-file`, so each file becomes one Unit and renaming a file
+renames a Unit.
 
 ## Docs
 
-- [install.md](./docs/install.md) — installing the bundles, variants, and releases into ConfigHub
-- [flattening.md](./docs/flattening.md) — why we render Helm to literal YAML, what breaks, how the guard works
-- [aws-credentials.md](./docs/aws-credentials.md) — the credential script, the IAM policy, and the out-of-band Secret
-- [dependencies.md](./docs/dependencies.md) — how values cross component boundaries
-- [teardown.md](./docs/teardown.md) — deleting the AWS resources, given `deletionPolicy: retain`
+- [dependencies.md](./docs/dependencies.md) — how values cross component boundaries, and the path-escaping trap
+- [flattening.md](./docs/flattening.md) — why Helm is rendered to literal YAML, what breaks, how the guard works
+- [aws-credentials.md](./docs/aws-credentials.md) — credential modes, the IAM policy, SSO sessions
+- [karpenter.md](./docs/karpenter.md) — the node pools, why the GPU AMI is pinned, the interruption queue
+- [install.md](./docs/install.md) — what the install and deploy commands actually do
+- [teardown.md](./docs/teardown.md) — deleting AWS resources, given `deletionPolicy: retain`

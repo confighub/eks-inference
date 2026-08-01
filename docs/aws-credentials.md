@@ -7,24 +7,25 @@ credentials. In kind neither is available, so they need a credentials file.
 This is the least pleasant part of the stack, and deliberately the only step that
 is not config.
 
-## Use the script
+## Use the plugin
 
 ```bash
-scripts/aws-creds.sh status          # what is in the cluster, and how long it lasts
-scripts/aws-creds.sh use-existing    # reuse your current AWS identity (SSO or key)
-scripts/aws-creds.sh refresh         # re-issue after `aws sso login`
-scripts/aws-creds.sh create-user     # create a dedicated IAM user for this stack
-scripts/aws-creds.sh delete-user     # remove that user, its policy, and its keys
+cub eksinf creds status          # what is in the cluster, and how long it lasts
+cub eksinf creds use-existing    # reuse your current AWS identity (SSO or key)
+cub eksinf creds refresh         # re-issue after `aws sso login`
+cub eksinf creds create-user     # create a dedicated IAM user for this stack
+cub eksinf creds delete-user     # remove that user, its policy, and its keys
+cub eksinf creds show-policy     # print the policy create-user attaches
 ```
 
-It finds the cub cluster's kubeconfig on its own (`cub cluster up` writes to
+It finds the management cluster on its own by looking for the one with an
+`ack-system` namespace. `cub cluster up` writes to
 `~/.confighub/clusters/<name>.kubeconfig` rather than adding a context to your
-default kubeconfig, so plain `kubectl --context kind-<name>` does not work). Pass
-`--cluster NAME` if you have more than one.
+default kubeconfig, so plain `kubectl --context kind-<name>` does not work.
 
-Both write-modes validate the credentials, warn if your default region disagrees
-with the stack's, write the Secret, and restart the controllers — credentials are
-read at startup, so a running controller will not pick up a rotated key by itself.
+Both write-modes validate the credentials, write the Secret, and restart the
+controllers — credentials are read at startup, so a running controller will not
+pick up a rotated key by itself.
 
 ## Which mode?
 
@@ -60,7 +61,7 @@ existing, and ACK picks up where it left off once credentials return:
 
 ```bash
 aws sso login
-scripts/aws-creds.sh refresh
+cub eksinf creds refresh
 ```
 
 `refresh` re-exports your credentials, updates the Secret, and restarts the
@@ -77,8 +78,9 @@ check whether your session will outlast what is still provisioning.
 ## The policy
 
 `create-user` attaches [`iam/ack-controllers-policy.json`](../iam/ack-controllers-policy.json),
-which is in the repo so it can be reviewed and edited rather than buried in a
-script. It grants:
+embedded in the plugin binary at build time so it works without a checkout, and
+kept as a reviewable JSON file rather than a string literal. Print it with
+`cub eksinf creds show-policy`. It grants:
 
 - `ec2:*` and `eks:*` — the network and the cluster
 - a specific list of `iam:*` role actions — the cluster and node roles
@@ -108,7 +110,7 @@ reported as drift. It is genuinely outside the managed set.
 ## Confirming it worked
 
 ```bash
-scripts/aws-creds.sh status
+cub eksinf creds status
 ```
 
 reports the Secret, whether it holds temporary or long-lived credentials, the
@@ -117,7 +119,7 @@ controller pods, and any ACK resources that exist.
 Failure modes, in the order you will meet them:
 
 - **`secret "aws-creds" not found`** on the pod — the Secret is missing or in the
-  wrong namespace. This is the expected state before you run the script.
+  wrong namespace. This is the expected state before you run the command.
 - **Controllers `Running` but nothing appears in AWS** — credentials are valid
   but under-permissioned. Look at the resource, not the pod:
   ```bash
@@ -126,8 +128,10 @@ Failure modes, in the order you will meet them:
   `ACK.Recoverable` means it will retry; `ACK.Terminal` means it has given up and
   the message says why.
 - **Everything reconciles, but into the wrong region** — the region comes from
-  `src/ack-controllers/values/*.yaml`, not from your AWS profile. The script warns
-  when the two disagree.
+  `src/ack-controllers/values/*.yaml`, baked into the controller Deployments at
+  render time, NOT from your AWS profile. Nothing currently checks that the two
+  agree, so a profile defaulting to a different region will look like resources
+  going missing.
 
 ## Region
 
@@ -135,9 +139,9 @@ The region is set in three chart values files
 (`src/ack-controllers/values/{ec2,iam,eks}.yaml`) and implied by the availability
 zones in `src/aws-network/network.yaml`. All four must agree.
 
-Exactly the kind of value that should come from one place — it is on the list for
-the `platform-profile` Unit, alongside the cluster name. See
-[dependencies.md](./dependencies.md).
+`platform-profile` carries `region`, but it cannot yet propagate to the chart
+values: those are consumed by Helm at render time, before ConfigHub sees them.
+Only the rendered output is linkable. See [dependencies.md](./dependencies.md).
 
 ## Rotating
 

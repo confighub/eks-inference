@@ -90,11 +90,12 @@ An earlier version also tagged the IAM node role for discovery. That did nothing
 `EC2NodeClass` takes `spec.role` as a plain role *name* and has no role selector,
 so no tag on it is ever read.
 
-Today it is a literal in both places. That is the thing to fix first.
+This is now owned by the `platform-profile` Unit and propagated by a ConfigHub
+link — see below.
 
-### The planned shape
+### The shape
 
-A `platform-profile` Space holding a single Unit:
+A `platform-profile` Space holding a single Unit, never applied to any cluster:
 
 ```yaml
 accountID: "…"
@@ -138,7 +139,7 @@ EOF
 
 ### What actually works (built, and verified against the live stack)
 
-`scripts/link-profile.sh` wires this up. Three links carrying nine paths, and they
+`cub eksinf link-profile` wires this up. Three links carrying nine paths, and they
 propagate **across the plane boundary** — `eks-cluster` is applied by the kind
 cluster and `karpenter` by EKS, and a single edit to the profile reaches both.
 That is worth stating plainly: Argo sync waves cannot express ordering between the

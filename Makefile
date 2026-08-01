@@ -1,15 +1,26 @@
-# eks-inference — config bundle build
+# eks-inference — building the config bundles and the plugin
 #
-# Everything CI does, it does by calling these targets. There is deliberately no
-# build logic inlined in the GitHub Actions workflow: if CI can do something you
-# cannot reproduce locally with `make`, the flattening is not reviewable.
+# THIS MAKEFILE IS FOR DEVELOPING THIS REPO, NOT FOR USING THE STACK.
+#
+# Everything a consumer does lives in the cub plugin:
+#
+#   cub plugin install confighub/eks-inference
+#   cub eksinf install | deploy | enroll | creds | link-profile | status
+#
+# What remains here needs the source tree, helm, and GNU tar, and only ever runs
+# here or in CI:
 #
 #   make render    helm charts + handwritten CRs -> configs/   (commits the diff)
 #   make guard     fail on Helm constructs that do not survive flattening
 #   make verify    render into a temp dir and diff against configs/ (CI drift gate)
 #   make bundles   configs/ -> dist/<component>.tar.gz  (reproducible tarballs)
 #   make push      dist/ -> $(REGISTRY)/<component>:latest
-#   make install   install the bundles into ConfigHub as component bases
+#   make plugin    build the eksinf binary locally
+#   make check     go vet + go test + gofmt, as CI runs them
+#
+# Everything CI does, it does by calling these targets. There is deliberately no
+# build logic inlined in the GitHub Actions workflows: if CI can do something you
+# cannot reproduce locally with `make`, the flattening is not reviewable.
 #
 # See docs/flattening.md for why the rendered output is committed.
 
@@ -63,19 +74,19 @@ bundles: guard ## Package configs/ into reproducible dist/<component>.tar.gz
 push: bundles ## Push bundles to $(REGISTRY)
 	@scripts/bundle.sh push $(BUNDLEABLE)
 
-.PHONY: install
-install: ## Create or update the component bases in ConfigHub from configs/
-	@scripts/install.sh
+.PHONY: plugin
+plugin: ## Build the eksinf plugin binary locally
+	@go build -o eksinf . && echo "built ./eksinf"
 
-.PHONY: install-diff
-install-diff: ## Report what install would change, without changing it
-	@scripts/install.sh --dry-run
-
-.PHONY: creds-status
-creds-status: ## Show AWS credential + controller + ACK resource state in the cluster
-	@scripts/aws-creds.sh status
+.PHONY: check
+check: ## go vet + go test + gofmt, as CI runs them
+	@go vet ./...
+	@go test ./...
+	@unformatted="$$(gofmt -l . | grep -v '^configs/' || true)"; \
+	if [ -n "$$unformatted" ]; then echo "not gofmt'd:"; echo "$$unformatted"; exit 1; fi
+	@echo "check passed"
 
 .PHONY: clean
 clean: ## Remove build output
-	@rm -rf dist
-	@echo "removed dist/"
+	@rm -rf dist eksinf
+	@echo "removed dist/ and ./eksinf"
