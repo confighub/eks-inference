@@ -93,6 +93,28 @@ func (r *runner) requireConfigHubAuth() error {
 	return nil
 }
 
+// cubStdin runs cub with a body on stdin. Used for `link create --from-stdin`,
+// which requires JSON — see the note in link.go.
+func (r *runner) cubStdin(body []byte, args ...string) (string, error) {
+	cmd := exec.Command("cub", args...)
+	cmd.Env = append(append([]string(nil), r.env...), "CONFIGHUB_AGENT=1")
+	cmd.Stdin = bytes.NewReader(body)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = strings.TrimSpace(stdout.String())
+		}
+		if msg == "" {
+			return "", fmt.Errorf("cub: %w", err)
+		}
+		return "", fmt.Errorf("cub: %s", firstLine(msg))
+	}
+	return stdout.String(), nil
+}
+
 // aws runs the AWS CLI, honouring --profile.
 func (r *runner) aws(args ...string) (string, error) {
 	if flagProfile != "" {
@@ -104,6 +126,22 @@ func (r *runner) aws(args ...string) (string, error) {
 // kubectl runs kubectl against an explicit kubeconfig.
 func (r *runner) kubectl(kubeconfig string, args ...string) (string, error) {
 	return r.withEnv("KUBECONFIG="+kubeconfig).run("kubectl", args...)
+}
+
+// kubectlApply pipes a manifest to `kubectl apply -f -`.
+func (r *runner) kubectlApply(kubeconfig, manifest string) error {
+	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd.Env = append(append([]string(nil), r.env...), "KUBECONFIG="+kubeconfig)
+	cmd.Stdin = strings.NewReader(manifest)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("kubectl apply: %s", firstLine(msg))
+		}
+		return fmt.Errorf("kubectl apply: %w", err)
+	}
+	return nil
 }
 
 // reachable reports whether a cluster genuinely answers. Callers must gate on

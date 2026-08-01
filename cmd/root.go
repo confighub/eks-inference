@@ -39,6 +39,10 @@ or its CI. This tool covers what a consumer of the stack does.`,
 
 	root.AddCommand(
 		newStatusCmd(),
+		newDeployCmd(),
+		newLinkProfileCmd(),
+		newEnrollCmd(),
+		newCredsCmd(),
 		newComponentsCmd(),
 		newVersionCmd(),
 	)
