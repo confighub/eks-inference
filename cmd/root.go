@@ -13,6 +13,9 @@ var (
 	flagProfile string
 )
 
+// ackPolicy is the embedded IAM policy, handed over by main. See embed.go.
+var ackPolicy []byte
+
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "eksinf",
@@ -38,6 +41,7 @@ or its CI. This tool covers what a consumer of the stack does.`,
 		"AWS profile to use (default: ambient credentials)")
 
 	root.AddCommand(
+		newInstallCmd(),
 		newStatusCmd(),
 		newDeployCmd(),
 		newLinkProfileCmd(),
@@ -51,7 +55,8 @@ or its CI. This tool covers what a consumer of the stack does.`,
 
 // Execute runs the command tree. main calls this after handing over the
 // embedded component manifest.
-func Execute(componentsData []byte) {
+func Execute(componentsData, policyData []byte) {
+	ackPolicy = policyData
 	if err := LoadComponents(componentsData); err != nil {
 		fmt.Fprintf(os.Stderr, "eksinf: %v\n", err)
 		os.Exit(1)

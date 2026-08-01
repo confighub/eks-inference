@@ -131,7 +131,11 @@ separate problems and only one of them needs the planes to see each other.`,
 				return r.unlinkProfile(out, profileSpace)
 			}
 
-			if !r.spaceExists(profileSpace) {
+			hasProfile, err := r.spaceExists(profileSpace)
+			if err != nil {
+				return fmt.Errorf("checking Space %s: %w", profileSpace, err)
+			}
+			if !hasProfile {
 				return fmt.Errorf(
 					"no Space %q — create it with:  cub variant create %s %s-base",
 					profileSpace, flagVariant, profileComponent)
@@ -203,7 +207,11 @@ func (r *runner) linkProfile(out interface{ Write([]byte) (int, error) }, profil
 
 	for _, k := range keys {
 		space := variantSpace(k.component, flagVariant)
-		if !r.spaceExists(space) {
+		has, err := r.spaceExists(space)
+		if err != nil {
+			return fmt.Errorf("checking Space %s: %w", space, err)
+		}
+		if !has {
 			fmt.Fprintf(out, "  SKIP %s (not deployed)\n", space)
 			continue
 		}
@@ -272,7 +280,11 @@ func (r *runner) unlinkProfile(out interface{ Write([]byte) (int, error) }, prof
 			continue
 		}
 		space := variantSpace(c.Name, flagVariant)
-		if !r.spaceExists(space) {
+		has, err := r.spaceExists(space)
+		if err != nil {
+			return fmt.Errorf("checking Space %s: %w", space, err)
+		}
+		if !has {
 			continue
 		}
 		outStr, err := r.cub("link", "list", "--space", space, "--no-headers")

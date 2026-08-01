@@ -64,12 +64,20 @@ ships at replicas: 0, so a deploy costs nothing until you ask for capacity.`,
 				down := variantSpace(comp.Name, flagVariant)
 				fmt.Fprintf(out, "==> %s\n", comp.Name)
 
-				if !r.spaceExists(base) {
+				hasBase, err := r.spaceExists(base)
+				if err != nil {
+					return fmt.Errorf("checking base Space %s: %w", base, err)
+				}
+				if !hasBase {
 					fmt.Fprintf(out, "    SKIP: no base Space %q — run 'cub eksinf install' first\n", base)
 					continue
 				}
 
-				if r.spaceExists(down) {
+				hasDown, err := r.spaceExists(down)
+				if err != nil {
+					return fmt.Errorf("checking variant Space %s: %w", down, err)
+				}
+				if hasDown {
 					fmt.Fprintf(out, "    variant %s already exists\n", down)
 				} else {
 					// --target also creates the Argo CD Application for a

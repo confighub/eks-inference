@@ -44,5 +44,5 @@ func main() {
 		return
 	}
 
-	cmd.Execute(componentsYAML)
+	cmd.Execute(componentsYAML, ackPolicyJSON)
 }

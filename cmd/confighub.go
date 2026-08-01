@@ -7,18 +7,43 @@ import (
 	"strings"
 )
 
-// spaceExists reports whether a Space is present. An error from cub is treated
-// as absence only for the "not found" case; anything else (auth, network) is
-// surfaced, because silently treating an outage as "absent" would make callers
-// try to create things that already exist.
-func (r *runner) spaceExists(slug string) bool {
+// spaceExists reports whether a Space is present.
+//
+// ONLY a recognisable "not found" counts as absence. Any other error — expired
+// token, unreachable server, permissions — is returned, because treating an
+// outage as "this does not exist" is how a tool cheerfully reports that it will
+// create eight things that already exist. An unrecognised error is deliberately
+// treated as fatal rather than as absence: guessing wrong in that direction is
+// the expensive one.
+func (r *runner) spaceExists(slug string) (bool, error) {
 	_, err := r.cub("space", "get", slug)
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	if isNotFound(err) {
+		return false, nil
+	}
+	return false, err
 }
 
-func (r *runner) unitExists(space, slug string) bool {
+func (r *runner) unitExists(space, slug string) (bool, error) {
 	_, err := r.cub("unit", "get", "--space", space, slug)
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	if isNotFound(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+// isNotFound recognises cub's absence errors. Anything it does not recognise is
+// reported as a real failure by the callers above.
+func isNotFound(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "does not exist") ||
+		strings.Contains(msg, "no such")
 }
 
 // publishRelease publishes a Space's release, tolerating the unchanged case.

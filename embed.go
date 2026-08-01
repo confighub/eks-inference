@@ -16,3 +16,11 @@ import _ "embed"
 //
 //go:embed components.yaml
 var componentsYAML []byte
+
+// The IAM policy granted to the dedicated ACK user, embedded for the same reason
+// components.yaml is: `creds create-user` must work from an installed binary
+// with no repo checkout. Keeping it as a reviewable JSON file at iam/ rather
+// than a string literal means it can be inspected and edited like config.
+//
+//go:embed iam/ack-controllers-policy.json
+var ackPolicyJSON []byte

@@ -300,7 +300,11 @@ func (r *runner) ensureRootApp(kc string, o *enrollOpts, registry string, w inte
 	appsSpace := o.name + "-argo-apps"
 	body := rootApplicationYAML(appsSpace, o.argoNS, registry)
 
-	if r.unitExists(appsSpace, "root") {
+	hasRoot, err := r.unitExists(appsSpace, "root")
+	if err != nil {
+		return fmt.Errorf("checking root Unit: %w", err)
+	}
+	if hasRoot {
 		if _, err := r.cubStdin([]byte(body), "unit", "update", "--space", appsSpace, "root", "-"); err != nil {
 			return fmt.Errorf("updating root Unit: %w", err)
 		}

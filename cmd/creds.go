@@ -35,6 +35,9 @@ therefore also invisible to Argo — never pruned, never reported as drift.`,
 		newCredsStatusCmd(),
 		newCredsUseExistingCmd(),
 		newCredsRefreshCmd(),
+		newCredsCreateUserCmd(),
+		newCredsDeleteUserCmd(),
+		newCredsShowPolicyCmd(),
 	)
 	return c
 }
