@@ -453,7 +453,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: AWS_REGION
-              value: us-west-2
+              value: confighubplaceholder
             - name: AWS_ENDPOINT_URL
               value: ""
             - name: AWS_IDENTITY_ENDPOINT_URL

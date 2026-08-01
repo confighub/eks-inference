@@ -183,10 +183,41 @@ both names, so a second link between the same pair collides. This is the right
 model rather than a limitation — a single Link carries many paths, so all of a
 Unit's bindings to the profile belong in one place.
 
-**Some values cannot be linked at all.** `karpenter`'s `settings.clusterName` is
-consumed by a Helm chart's `values.yaml` and resolved at render time, before
-ConfigHub ever sees it. Anything a chart templates is outside the reach of links;
-only the rendered output is linkable.
+**Helm values are reachable after all — through their rendered output.** It is
+tempting to conclude that anything a chart templates is beyond ConfigHub, since
+Helm resolves values before ConfigHub sees anything. But the *result* lands in
+the rendered manifest, and that is what ConfigHub stores.
+
+So the region, which the ACK charts consume as `aws.region`, renders into the
+controller Deployment as `AWS_REGION` and is linkable there. The chart values
+carry `confighubplaceholder` and a link fills the rendered env var.
+
+**Prefer a setter to a positional path.** `AWS_REGION` is the sixth entry in the
+container's `env` list, so a path binding would be
+`spec.template.spec.containers.0.env.5.value` — and a chart bump that adds or
+reorders an env var would silently redirect the write into a neighbouring
+variable. The `set-env-var` function addresses it by NAME instead, via the Link's
+`DownstreamSetters`:
+
+```json
+"DownstreamSetters": [{
+  "Parameters": ["region"],
+  "FunctionInvocation": {
+    "FunctionName": "set-env-var",
+    "WhereResource": "ConfigHub.ResourceType = 'apps/v1/Deployment'",
+    "Arguments": [
+      {"Value": "controller"},
+      {"Value": "AWS_REGION"},
+      {"Value": "{{.Params.region}}", "Evaluator": "template"}
+    ]
+  }
+}]
+```
+
+Any value whose location is positional wants a setter rather than a path.
+
+What genuinely remains unlinkable is a value a chart consumes without emitting —
+one that changes *which* resources are rendered rather than what is in them.
 
 ### Derived values
 

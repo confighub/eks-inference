@@ -27,10 +27,21 @@ import (
 type binding struct {
 	Component string // component whose Unit receives the value
 	Unit      string // Unit within that component
-	Field     string // field on the profile's spec to read
+	Field     string // template parameter name; also the profile field unless Upstream is set
 	Type      string // downstream resource type
 	Resource  string // downstream resource name ("namespace/name", or "/name" if cluster-scoped)
 	Path      string // downstream path, with ~1 escaping where needed
+	Upstream  string // profile path to read; defaults to "spec.<Field>"
+}
+
+// upstreamPathFor resolves the profile path this binding reads. Most bindings
+// read spec.<Field>; the availability zones read indexed elements of a list, so
+// the parameter name and the path differ.
+func (b binding) upstreamPathFor() string {
+	if b.Upstream != "" {
+		return b.Upstream
+	}
+	return "spec." + b.Field
 }
 
 // The bindings this stack needs. Only paths whose map keys can be escaped, or
@@ -39,25 +50,46 @@ type binding struct {
 // they are resolved at render time, before ConfigHub ever sees them.
 var profileBindings = []binding{
 	{"karpenter", "nodeclasses", "networkName", "karpenter.k8s.aws/v1/EC2NodeClass", "/general",
-		"spec.subnetSelectorTerms.0.tags.karpenter~1sh/discovery"},
+		"spec.subnetSelectorTerms.0.tags.karpenter~1sh/discovery", ""},
 	{"karpenter", "nodeclasses", "networkName", "karpenter.k8s.aws/v1/EC2NodeClass", "/general",
-		"spec.securityGroupSelectorTerms.0.tags.karpenter~1sh/discovery"},
+		"spec.securityGroupSelectorTerms.0.tags.karpenter~1sh/discovery", ""},
 	{"karpenter", "nodeclasses", "networkName", "karpenter.k8s.aws/v1/EC2NodeClass", "/gpu",
-		"spec.subnetSelectorTerms.0.tags.karpenter~1sh/discovery"},
+		"spec.subnetSelectorTerms.0.tags.karpenter~1sh/discovery", ""},
 	{"karpenter", "nodeclasses", "networkName", "karpenter.k8s.aws/v1/EC2NodeClass", "/gpu",
-		"spec.securityGroupSelectorTerms.0.tags.karpenter~1sh/discovery"},
-	{"karpenter", "nodeclasses", "nodeRoleName", "karpenter.k8s.aws/v1/EC2NodeClass", "/general", "spec.role"},
-	{"karpenter", "nodeclasses", "nodeRoleName", "karpenter.k8s.aws/v1/EC2NodeClass", "/gpu", "spec.role"},
+		"spec.securityGroupSelectorTerms.0.tags.karpenter~1sh/discovery", ""},
+	{"karpenter", "nodeclasses", "nodeRoleName", "karpenter.k8s.aws/v1/EC2NodeClass", "/general", "spec.role", ""},
+	{"karpenter", "nodeclasses", "nodeRoleName", "karpenter.k8s.aws/v1/EC2NodeClass", "/gpu", "spec.role", ""},
 	{"karpenter", "nodeclasses", "gpuAMIAlias", "karpenter.k8s.aws/v1/EC2NodeClass", "/gpu",
-		"spec.amiSelectorTerms.0.alias"},
+		"spec.amiSelectorTerms.0.alias", ""},
 	// Cross-plane: these Units are applied by the kind cluster while the ones
 	// above are applied by EKS. A ConfigHub link spans that boundary without
 	// either cluster knowing the other exists.
 	{"eks-cluster", "cluster", "clusterName", "eks.services.k8s.aws/v1alpha1/Cluster",
-		"aws-inference/inference-demo", "spec.name"},
+		"aws-inference/inference-demo", "spec.name", ""},
 	{"eks-cluster", "nodegroup", "nodeRoleName", "eks.services.k8s.aws/v1alpha1/Nodegroup",
-		"aws-inference/inference-demo-system", "spec.nodeRoleRef.from.name"},
+		"aws-inference/inference-demo-system", "spec.nodeRoleRef.from.name", ""},
+
+	// Availability zones. Six subnets draw from three profile values, so the
+	// parameter name and the upstream path differ here — hence Upstream.
+	//
+	// These matter as much as the region: an AZ string encodes the region, so
+	// leaving them literal while the region is linked gives a half-parameterised
+	// stack where the controllers move and the subnets do not.
+	{"aws-network", "network", "az0", subnetType, "aws-inference/inference-demo-private-a",
+		"spec.availabilityZone", "spec.availabilityZones.0"},
+	{"aws-network", "network", "az1", subnetType, "aws-inference/inference-demo-private-b",
+		"spec.availabilityZone", "spec.availabilityZones.1"},
+	{"aws-network", "network", "az2", subnetType, "aws-inference/inference-demo-private-c",
+		"spec.availabilityZone", "spec.availabilityZones.2"},
+	{"aws-network", "network", "az0", subnetType, "aws-inference/inference-demo-public-a",
+		"spec.availabilityZone", "spec.availabilityZones.0"},
+	{"aws-network", "network", "az1", subnetType, "aws-inference/inference-demo-public-b",
+		"spec.availabilityZone", "spec.availabilityZones.1"},
+	{"aws-network", "network", "az2", subnetType, "aws-inference/inference-demo-public-c",
+		"spec.availabilityZone", "spec.availabilityZones.2"},
 }
+
+const subnetType = "ec2.services.k8s.aws/v1alpha1/Subnet"
 
 const (
 	profileComponent = "platform-profile"
@@ -72,8 +104,50 @@ const (
 // field in it, producing a Link with null paths that propagates nothing while
 // reporting success. See confighubai/confighub#4904.
 type linkPayload struct {
-	UpstreamPaths   []upstreamPath   `json:"UpstreamPaths"`
-	DownstreamPaths []downstreamPath `json:"DownstreamPaths"`
+	UpstreamPaths     []upstreamPath   `json:"UpstreamPaths"`
+	DownstreamPaths   []downstreamPath `json:"DownstreamPaths,omitempty"`
+	DownstreamSetters []setter         `json:"DownstreamSetters,omitempty"`
+}
+
+// A setter invokes a mutating function on the downstream Unit instead of writing
+// a raw path. Use it wherever a path would be positional.
+//
+// AWS_REGION is the case in point: it is the sixth entry in the ACK controller's
+// env list, so a path binding would be
+// spec.template.spec.containers.0.env.5.value — and a chart bump that adds or
+// reorders an env var would silently redirect the write into a neighbouring
+// variable. set-env-var addresses it BY NAME, so the binding survives.
+type setter struct {
+	Parameters         []string           `json:"Parameters"`
+	FunctionInvocation functionInvocation `json:"FunctionInvocation"`
+}
+
+type functionInvocation struct {
+	FunctionName  string     `json:"FunctionName"`
+	WhereResource string     `json:"WhereResource,omitempty"`
+	Arguments     []argument `json:"Arguments"`
+}
+
+type argument struct {
+	Value     string `json:"Value"`
+	Evaluator string `json:"Evaluator,omitempty"`
+}
+
+// envBinding fills a container env var on a Unit from a profile field.
+type envBinding struct {
+	Component string
+	Unit      string
+	Field     string // profile spec field to read
+	Container string // container name, or "*" for any
+	EnvVar    string // env var to set
+}
+
+// The ACK controllers all render AWS_REGION as a literal placeholder; the region
+// belongs to the environment, not the chart.
+var profileEnvBindings = []envBinding{
+	{"ack-controllers", "ec2-controller", "region", "controller", "AWS_REGION"},
+	{"ack-controllers", "iam-controller", "region", "controller", "AWS_REGION"},
+	{"ack-controllers", "eks-controller", "region", "controller", "AWS_REGION"},
 }
 
 type resourceRef struct {
@@ -162,6 +236,14 @@ func groupBindings() ([]groupKey, map[groupKey][]binding) {
 		k := groupKey{b.Component, b.Unit}
 		groups[k] = append(groups[k], b)
 	}
+	// Env bindings share the (component, unit) grouping — one Link per pair
+	// carries both paths and setters.
+	for _, e := range profileEnvBindings {
+		k := groupKey{e.Component, e.Unit}
+		if _, ok := groups[k]; !ok {
+			groups[k] = nil
+		}
+	}
 	keys := make([]groupKey, 0, len(groups))
 	for k := range groups {
 		keys = append(keys, k)
@@ -175,7 +257,17 @@ func groupBindings() ([]groupKey, map[groupKey][]binding) {
 	return keys, groups
 }
 
-func payloadFor(bs []binding) ([]byte, error) {
+func envBindingsFor(k groupKey) []envBinding {
+	var out []envBinding
+	for _, e := range profileEnvBindings {
+		if e.Component == k.component && e.Unit == k.unit {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func payloadFor(bs []binding, envs []envBinding) ([]byte, error) {
 	var p linkPayload
 	seen := map[string]bool{}
 	for _, b := range bs {
@@ -185,7 +277,7 @@ func payloadFor(bs []binding) ([]byte, error) {
 			seen[b.Field] = true
 			p.UpstreamPaths = append(p.UpstreamPaths, upstreamPath{
 				Name:     b.Field,
-				Path:     "spec." + b.Field,
+				Path:     b.upstreamPathFor(),
 				Resource: resourceRef{profileKind, profileResource},
 			})
 		}
@@ -196,6 +288,29 @@ func payloadFor(bs []binding) ([]byte, error) {
 			Evaluator:  "template",
 			Parameters: []string{b.Field},
 			DataType:   "string",
+		})
+	}
+
+	for _, e := range envs {
+		if !seen[e.Field] {
+			seen[e.Field] = true
+			p.UpstreamPaths = append(p.UpstreamPaths, upstreamPath{
+				Name:     e.Field,
+				Path:     "spec." + e.Field,
+				Resource: resourceRef{profileKind, profileResource},
+			})
+		}
+		p.DownstreamSetters = append(p.DownstreamSetters, setter{
+			Parameters: []string{e.Field},
+			FunctionInvocation: functionInvocation{
+				FunctionName:  "set-env-var",
+				WhereResource: "ConfigHub.ResourceType = 'apps/v1/Deployment'",
+				Arguments: []argument{
+					{Value: e.Container},
+					{Value: e.EnvVar},
+					{Value: "{{.Params." + e.Field + "}}", Evaluator: "template"},
+				},
+			},
 		})
 	}
 	return json.Marshal(p)
@@ -215,7 +330,8 @@ func (r *runner) linkProfile(out interface{ Write([]byte) (int, error) }, profil
 			fmt.Fprintf(out, "  SKIP %s (not deployed)\n", space)
 			continue
 		}
-		body, err := payloadFor(groups[k])
+		envs := envBindingsFor(k)
+		body, err := payloadFor(groups[k], envs)
 		if err != nil {
 			return err
 		}
@@ -224,12 +340,15 @@ func (r *runner) linkProfile(out interface{ Write([]byte) (int, error) }, profil
 			"--auto-update", "--from-stdin"); err != nil {
 			return fmt.Errorf("linking %s/%s: %w", space, k.unit, err)
 		}
-		fmt.Fprintf(out, "  %s/%s: %d path(s)\n", space, k.unit, len(groups[k]))
+		fmt.Fprintf(out, "  %s/%s: %d path(s), %d setter(s)\n", space, k.unit, len(groups[k]), len(envs))
 		for _, b := range groups[k] {
 			fmt.Fprintf(out, "      %-14s -> %s\n", b.Field, b.Path)
 		}
+		for _, e := range envs {
+			fmt.Fprintf(out, "      %-14s -> set-env-var %s/%s\n", e.Field, e.Container, e.EnvVar)
+		}
 		links++
-		paths += len(groups[k])
+		paths += len(groups[k]) + len(envs)
 	}
 
 	fmt.Fprintf(out, "\nCreated %d link(s) carrying %d path(s) from %s.\n", links, paths, profileSpace)
@@ -245,8 +364,12 @@ func (r *runner) listProfileLinks(out interface{ Write([]byte) (int, error) }, p
 	keys, groups := groupBindings()
 	for _, k := range keys {
 		for _, b := range groups[k] {
-			fmt.Fprintf(out, "  %-16s %-12s %-14s %-34s %s\n",
+			fmt.Fprintf(out, "  %-16s %-18s %-12s %-30s %s\n",
 				variantSpace(k.component, flagVariant), k.unit, b.Field, b.Resource, b.Path)
+		}
+		for _, e := range envBindingsFor(k) {
+			fmt.Fprintf(out, "  %-16s %-18s %-12s %-30s set-env-var %s\n",
+				variantSpace(k.component, flagVariant), k.unit, e.Field, e.Container, e.EnvVar)
 		}
 	}
 	fmt.Fprintf(out, "\nExisting links to %s:\n", profileSpace)

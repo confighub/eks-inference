@@ -128,20 +128,21 @@ Failure modes, in the order you will meet them:
   `ACK.Recoverable` means it will retry; `ACK.Terminal` means it has given up and
   the message says why.
 - **Everything reconciles, but into the wrong region** — the region comes from
-  `src/ack-controllers/values/*.yaml`, baked into the controller Deployments at
-  render time, NOT from your AWS profile. Nothing currently checks that the two
-  agree, so a profile defaulting to a different region will look like resources
-  going missing.
+  the `platform-profile` Unit, not from your AWS profile. If they disagree,
+  resources appear in a region your CLI is not looking at.
 
 ## Region
 
-The region is set in three chart values files
-(`src/ack-controllers/values/{ec2,iam,eks}.yaml`) and implied by the availability
-zones in `src/aws-network/network.yaml`. All four must agree.
+The region has exactly one owner: `spec.region` on the `platform-profile` Unit,
+with `spec.availabilityZones` alongside it.
 
-`platform-profile` carries `region`, but it cannot yet propagate to the chart
-values: those are consumed by Helm at render time, before ConfigHub sees them.
-Only the rendered output is linkable. See [dependencies.md](./dependencies.md).
+The chart values render `AWS_REGION: confighubplaceholder` and the subnets render
+`availabilityZone: confighubplaceholder`; `cub eksinf link-profile` fills both.
+Change the region in one place and everything follows.
+
+`vet-placeholders` fails while any placeholder remains, so a stack deployed
+without running `link-profile` is caught rather than silently reconciling into
+nowhere. See [dependencies.md](./dependencies.md).
 
 ## Rotating
 

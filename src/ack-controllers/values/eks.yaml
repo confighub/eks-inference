@@ -3,7 +3,16 @@
 # See ec2.yaml for why deletionPolicy is retain. It matters most here: a pruned
 # eks.services.k8s.aws/Cluster would tear down the control plane.
 aws:
-  region: us-west-2
+  # PLACEHOLDER, deliberately. The region is not knowable at render time — it
+  # belongs to the environment, not to the chart — so it renders as the ConfigHub
+  # sentinel and is filled in per variant by a link from the platform-profile
+  # Unit. `vet-placeholders` fails while any remain, so an unfilled region is
+  # caught before it reaches a cluster rather than after.
+  #
+  # The link uses the set-env-var function rather than a raw path: AWS_REGION is
+  # addressed BY NAME, so a chart bump that adds or reorders env vars cannot
+  # silently redirect the write into a neighbouring variable.
+  region: confighubplaceholder
   credentials:
     secretName: aws-creds
     secretKey: credentials
