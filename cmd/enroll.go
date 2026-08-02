@@ -44,6 +44,8 @@ type enrollOpts struct {
 	argoNS      string
 	ociRegistry string
 	noArgoCD    bool
+
+	noPlaceholderGate bool
 }
 
 func newEnrollRunCmd() *cobra.Command {
@@ -111,6 +113,8 @@ func newEnrollRunCmd() *cobra.Command {
 	c.Flags().StringVar(&o.argoNS, "argocd-namespace", "argocd", "namespace to install Argo CD into")
 	c.Flags().StringVar(&o.ociRegistry, "oci-registry", "", "override the OCI registry (derived from the cub context by default)")
 	c.Flags().BoolVar(&o.noArgoCD, "no-argocd", false, "do not install Argo CD; fail if it is absent")
+	c.Flags().BoolVar(&o.noPlaceholderGate, "no-placeholder-gate", false,
+		"skip the default vet-placeholders Trigger, allowing Releases with unfilled placeholders")
 	return c
 }
 
@@ -189,6 +193,49 @@ func (r *runner) enrollConfigHubSide(o *enrollOpts, w interface{ Write([]byte) (
 		return fmt.Errorf("setting release target on %s: %w", appsSpace, err)
 	}
 	fmt.Fprintf(w, "  space %s: release target %s/target\n", appsSpace, o.name)
+
+	if err := r.ensurePlaceholderGate(o, w); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensurePlaceholderGate makes the cluster refuse Releases that still contain an
+// unfilled confighubplaceholder value, matching what `cub cluster up` does for
+// the clusters it creates (cub >= v0.2.10).
+//
+// This stack depends on it. The AWS region and the subnet availability zones are
+// rendered as placeholders and filled per environment by links from the
+// platform-profile Unit. Without the gate, forgetting `eksinf link-profile`
+// publishes cleanly and the ACK controllers come up with a literal region of
+// "confighubplaceholder", reconciling into nowhere while reporting healthy.
+//
+// The Target selects every Trigger in the cluster Space, so additional gates are
+// just more Triggers there plus `cub target update --refresh-triggers`.
+func (r *runner) ensurePlaceholderGate(o *enrollOpts, w interface{ Write([]byte) (int, error) }) error {
+	if o.noPlaceholderGate {
+		fmt.Fprintln(w, "  placeholder gate: SKIPPED (--no-placeholder-gate)")
+		return nil
+	}
+	if _, err := r.cub("trigger", "create", "no-placeholders",
+		"Mutation", "Kubernetes/YAML", "vet-placeholders",
+		"--space", o.name, "--allow-exists",
+		"--description", "Blocks publishing a Release that still contains an unfilled confighubplaceholder value."); err != nil {
+		return fmt.Errorf("creating the placeholder Trigger: %w", err)
+	}
+	out, err := r.cub("space", "get", o.name, "-o", "json")
+	if err != nil {
+		return fmt.Errorf("reading Space %s: %w", o.name, err)
+	}
+	spaceID := extractJSONString(out, "SpaceID")
+	if spaceID == "" {
+		return fmt.Errorf("could not read SpaceID for %s", o.name)
+	}
+	if _, err := r.cub("target", "update", "--space", o.name, "target",
+		"--where-trigger", "SpaceID = '"+spaceID+"'"); err != nil {
+		return fmt.Errorf("attaching the gate to the target: %w", err)
+	}
+	fmt.Fprintln(w, "  placeholder gate: on (Releases with unfilled placeholders are blocked)")
 	return nil
 }
 

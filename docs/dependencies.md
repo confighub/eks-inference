@@ -255,3 +255,36 @@ how to assess an ACK resource. Without a resource customization keyed on
 `ACK.ResourceSynced`, a wave advances when resources are *created*, not when the
 AWS resources are ready. The refs in mechanism 1 are what actually make this
 safe; the waves just reduce noise.
+
+## The gate
+
+Placeholders are only safe if forgetting to fill them is *caught*. Since cub
+v0.2.10, `cub cluster up` attaches a `vet-placeholders` Trigger to the OCI Target
+it creates, and `eksinf enroll` does the same for clusters it enrolls. Publishing
+a Release that still contains one is refused:
+
+```
+Failed: HTTP 422: outstanding ApplyGates; triggers re-queued for evaluation
+  Apply Gates: inf/no-placeholders/vet-placeholders
+```
+
+This is server-side, so it holds regardless of what drives the publish — the
+plugin, raw `cub`, or the UI. It is the difference between a convention and a
+constraint.
+
+The Target selects every Trigger in the cluster Space, so additional gates are
+just more Triggers there followed by:
+
+```bash
+cub target update --space <cluster> target --refresh-triggers
+```
+
+Pass `--no-placeholder-gate` to `eksinf enroll` (or `cub cluster up`) to opt out.
+
+Clusters created before v0.2.10 do not have the gate. To add it:
+
+```bash
+SPACE_ID=$(cub space get <cluster> -o json | jq -r .Space.SpaceID)
+cub trigger create no-placeholders Mutation Kubernetes/YAML vet-placeholders --space <cluster>
+cub target update --space <cluster> target --where-trigger "SpaceID = '$SPACE_ID'"
+```

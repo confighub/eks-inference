@@ -102,3 +102,14 @@ it reaches a cluster.
 
 It also means `cub variant upload ./configs/aws-network` works from a checkout
 with no Helm installed.
+
+### The rendered output is deliberately incomplete
+
+`configs/` is NOT directly applicable, and that is on purpose. The AWS region and
+the subnet availability zones render as `confighubplaceholder`; they belong to an
+environment, not to a chart. A `kubectl apply -f configs/ack-controllers/` would
+install controllers with a literal region of "confighubplaceholder".
+
+They are filled per variant by links from the `platform-profile` Unit, and a
+`vet-placeholders` Trigger on each cluster's Target refuses to publish a Release
+that still contains one. See [dependencies.md](./dependencies.md).
