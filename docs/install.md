@@ -69,14 +69,9 @@ cub release publish aws-network-dev
 > components are separate Applications syncing independently, so there is no
 > ordering between them.
 >
-> Sync waves order resources *within* an Argo Application. Ordering *between*
-> Applications is a separate concern. Until this is confirmed against a live
-> `cub cluster up`, treat the ordering between `ack-controllers`, `aws-network`,
-> and `eks-cluster` as unenforced.
->
 > In practice ACK converges anyway — a resource whose reference cannot resolve
-> requeues rather than fails permanently — so the stack should reach the right
-> state regardless. It will just be noisy on the way there.
+> requeues rather than fails permanently — so the stack reaches the right state
+> regardless. It is just noisy on the way there.
 
 ## 5. Credentials
 
