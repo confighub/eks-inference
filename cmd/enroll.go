@@ -229,7 +229,7 @@ func (r *runner) ensurePlaceholderGate(o *enrollOpts, w interface{ Write([]byte)
 	if err != nil {
 		return fmt.Errorf("reading Space %s: %w", o.name, err)
 	}
-	spaceID := extractJSONString(out, "SpaceID")
+	spaceID := extractJSONAt(out, "Space", "SpaceID")
 	if spaceID == "" {
 		return fmt.Errorf("could not read SpaceID for %s", o.name)
 	}
@@ -282,7 +282,7 @@ func (r *runner) ensureOCICredentials(kc string, o *enrollOpts, registry string,
 	if err != nil {
 		return fmt.Errorf("reading worker: %w", err)
 	}
-	workerID := extractJSONString(idOut, "BridgeWorkerID")
+	workerID := extractJSONAt(idOut, "BridgeWorker", "BridgeWorkerID")
 	if workerID == "" {
 		return fmt.Errorf("could not read BridgeWorkerID for %s/worker", o.name)
 	}
@@ -476,10 +476,36 @@ func extractJSONString(blob, key string) string {
 	return findJSONString(doc, key)
 }
 
+// extractJSONAt pulls a string from an explicit path, which is what callers
+// should use whenever they know the shape.
+//
+// Searching by key alone is not safe on cub's output: `cub unit get` returns
+// six sibling entities and TWO of them carry a UnitID — Unit.UnitID and
+// UpstreamUnit.UnitID. A search returns whichever the traversal reaches first,
+// so it happened to be right only because "Unit" sorts before "UpstreamUnit".
+// Naming the path removes the coincidence.
+func extractJSONAt(blob string, path ...string) string {
+	var doc any
+	if err := json.Unmarshal([]byte(blob), &doc); err != nil {
+		return ""
+	}
+	for _, key := range path {
+		m, ok := doc.(map[string]any)
+		if !ok {
+			return ""
+		}
+		doc, ok = m[key]
+		if !ok {
+			return ""
+		}
+	}
+	s, _ := doc.(string)
+	return s
+}
+
 // findJSONString walks the decoded document for the first string value under
-// key, at any depth. cub nests entities differently per command (Space.SpaceID,
-// BridgeWorker.BridgeWorkerID), and the depth is not worth encoding at each
-// call site.
+// key, at any depth. Prefer extractJSONAt where the shape is known; this
+// remains for the cases where it genuinely is not.
 func findJSONString(node any, key string) string {
 	switch v := node.(type) {
 	case map[string]any:

@@ -321,6 +321,57 @@ func payloadFor(bs []binding, envs []envBinding) ([]byte, error) {
 	return json.Marshal(p)
 }
 
+// unitID resolves a Unit's UUID, which is how Links address their endpoints.
+func (r *runner) unitID(space, unit string) (string, error) {
+	out, err := r.cub("unit", "get", unit, "--space", space, "-o", "json")
+	if err != nil {
+		return "", fmt.Errorf("reading unit %s/%s: %w", space, unit, err)
+	}
+	id := extractJSONAt(out, "Unit", "UnitID")
+	if id == "" {
+		return "", fmt.Errorf("no UnitID for %s/%s", space, unit)
+	}
+	return id, nil
+}
+
+// findLink returns the slug of the Link from one Unit to another, or "" when
+// there is none. Links are matched by endpoint IDs rather than by their
+// generated slug, which carries a hash this cannot reproduce.
+func (r *runner) findLink(space, fromUnit, toSpace, toUnit string) (string, error) {
+	fromID, err := r.unitID(space, fromUnit)
+	if err != nil {
+		return "", err
+	}
+	toID, err := r.unitID(toSpace, toUnit)
+	if err != nil {
+		return "", err
+	}
+	out, err := r.cub("link", "list", "--space", space, "-o", "json")
+	if err != nil {
+		return "", fmt.Errorf("listing links in %s: %w", space, err)
+	}
+	// Each item wraps the Link alongside its resolved endpoints
+	// ({FromUnit, Link, Space, ToSpace, ToUnit}) rather than being the Link
+	// itself. Decoding it flat yields zero values for every field and silently
+	// matches nothing, which reads as "no such link" and then fails on create.
+	var items []struct {
+		Link struct {
+			Slug       string `json:"Slug"`
+			FromUnitID string `json:"FromUnitID"`
+			ToUnitID   string `json:"ToUnitID"`
+		} `json:"Link"`
+	}
+	if err := json.Unmarshal([]byte(out), &items); err != nil {
+		return "", fmt.Errorf("parsing links in %s: %w", space, err)
+	}
+	for _, it := range items {
+		if it.Link.FromUnitID == fromID && it.Link.ToUnitID == toID {
+			return it.Link.Slug, nil
+		}
+	}
+	return "", nil
+}
+
 // resolveUnit pulls a Link's values into the downstream Unit's data.
 //
 // Creating a Link records the relationship; it does NOT rewrite the downstream
@@ -357,10 +408,24 @@ func (r *runner) linkProfile(out interface{ Write([]byte) (int, error) }, profil
 		if err != nil {
 			return err
 		}
-		if _, err := r.cubStdin(body, "link", "create", "--space", space, "-", k.unit,
-			profileUnit, profileSpace, "--update-type", "TransformPaths",
-			"--auto-update", "--from-stdin"); err != nil {
-			return fmt.Errorf("linking %s/%s: %w", space, k.unit, err)
+		// Create if absent, patch if present. --allow-exists is NOT sufficient
+		// here: it tolerates the existing Link without touching its paths, so a
+		// binding added to this table later would never reach a stack that had
+		// already been linked, and the command would report success. That is
+		// the same trap as `cub variant upload --allow-exists`.
+		existing, err := r.findLink(space, k.unit, profileSpace, profileUnit)
+		if err != nil {
+			return err
+		}
+		if existing == "" {
+			if _, err := r.cubStdin(body, "link", "create", "--space", space, "-", k.unit,
+				profileUnit, profileSpace, "--update-type", "TransformPaths",
+				"--auto-update", "--from-stdin"); err != nil {
+				return fmt.Errorf("linking %s/%s: %w", space, k.unit, err)
+			}
+		} else if _, err := r.cubStdin(body, "link", "update", existing,
+			"--space", space, "--patch", "--from-stdin"); err != nil {
+			return fmt.Errorf("updating link %s in %s: %w", existing, space, err)
 		}
 		fmt.Fprintf(out, "  %s/%s: %d path(s), %d setter(s)\n", space, k.unit, len(groups[k]), len(envs))
 		for _, b := range groups[k] {
@@ -380,7 +445,7 @@ func (r *runner) linkProfile(out interface{ Write([]byte) (int, error) }, profil
 		paths += len(groups[k]) + len(envs)
 	}
 
-	fmt.Fprintf(out, "\nCreated %d link(s) carrying %d path(s) from %s, and resolved them.\n",
+	fmt.Fprintf(out, "\nLinked %d unit(s) carrying %d path(s) from %s, and resolved them.\n",
 		links, paths, profileSpace)
 	return nil
 }

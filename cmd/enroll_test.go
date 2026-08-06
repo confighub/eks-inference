@@ -32,6 +32,26 @@ func TestExtractJSONString(t *testing.T) {
 	if got := extractJSONString(`{"SpaceID": 42}`, "SpaceID"); got != "" {
 		t.Errorf("numeric value = %q, want empty", got)
 	}
+	// extractJSONAt addresses a known path, which is what disambiguates the
+	// real cub response: `cub unit get` carries UnitID twice.
+	twoUnitIDs := `{
+  "Unit": {"UnitID": "the-right-one"},
+  "UpstreamUnit": {"UnitID": "the-upstream-one"},
+  "FromLink": null
+}`
+	if got := extractJSONAt(twoUnitIDs, "Unit", "UnitID"); got != "the-right-one" {
+		t.Errorf("Unit.UnitID = %q, want the-right-one", got)
+	}
+	if got := extractJSONAt(twoUnitIDs, "UpstreamUnit", "UnitID"); got != "the-upstream-one" {
+		t.Errorf("UpstreamUnit.UnitID = %q, want the-upstream-one", got)
+	}
+	if got := extractJSONAt(twoUnitIDs, "Nope", "UnitID"); got != "" {
+		t.Errorf("absent path = %q, want empty", got)
+	}
+	if got := extractJSONAt(twoUnitIDs, "FromLink", "UnitID"); got != "" {
+		t.Errorf("null branch = %q, want empty", got)
+	}
+
 	// Nested under an array, as list-shaped responses are.
 	nested := `{"Items": [{"BridgeWorker": {"BridgeWorkerID": "w-123"}}]}`
 	if got := extractJSONString(nested, "BridgeWorkerID"); got != "w-123" {
