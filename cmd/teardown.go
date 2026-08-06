@@ -11,6 +11,16 @@ import (
 
 const ackDeletionPolicyAnnotation = "services.k8s.aws/deletion-policy"
 
+// Every ACK kind this stack creates. The annotation wait and the delete MUST
+// use the same list: a kind checked but not deleted leaks, and a kind deleted
+// but not checked is deleted while possibly still set to retain.
+const ackKinds = "nodegroup.eks.services.k8s.aws,addon.eks.services.k8s.aws," +
+	"podidentityassociation.eks.services.k8s.aws,cluster.eks.services.k8s.aws," +
+	"natgateway.ec2.services.k8s.aws,elasticipaddress.ec2.services.k8s.aws," +
+	"subnet.ec2.services.k8s.aws,routetable.ec2.services.k8s.aws," +
+	"internetgateway.ec2.services.k8s.aws,securitygroup.ec2.services.k8s.aws," +
+	"vpc.ec2.services.k8s.aws,role.iam.services.k8s.aws"
+
 func newTeardownCmd() *cobra.Command {
 	var planeFlag, region string
 	var yes, deleteConfig bool
@@ -250,13 +260,7 @@ func (r *runner) teardownMgmt(region string, w io.Writer) error {
 	// same way it requeues a reference it cannot resolve during creation, so
 	// exact ordering is advisory — it converges, noisily.
 	fmt.Fprintln(w, "  deleting ACK resources")
-	kinds := "nodegroup.eks.services.k8s.aws,addon.eks.services.k8s.aws," +
-		"podidentityassociation.eks.services.k8s.aws,cluster.eks.services.k8s.aws," +
-		"natgateway.ec2.services.k8s.aws,elasticipaddress.ec2.services.k8s.aws," +
-		"subnet.ec2.services.k8s.aws,routetable.ec2.services.k8s.aws," +
-		"internetgateway.ec2.services.k8s.aws,securitygroup.ec2.services.k8s.aws," +
-		"vpc.ec2.services.k8s.aws,role.iam.services.k8s.aws"
-	if _, err := r.kubectl(kc, "delete", kinds, "-n", "aws-inference",
+	if _, err := r.kubectl(kc, "delete", ackKinds, "-n", "aws-inference",
 		"--all", "--wait=false"); err != nil {
 		return fmt.Errorf("deleting ACK resources: %w", err)
 	}
@@ -271,7 +275,7 @@ func (r *runner) teardownMgmt(region string, w io.Writer) error {
 	fmt.Fprintln(w, "  waiting for AWS to converge (this takes ~20 minutes)")
 	deadline := time.Now().Add(35 * time.Minute)
 	for {
-		out, err := r.kubectl(kc, "get", kinds, "-n", "aws-inference", "-o", "name")
+		out, err := r.kubectl(kc, "get", ackKinds, "-n", "aws-inference", "-o", "name")
 		if err != nil {
 			return fmt.Errorf("checking remaining resources: %w", err)
 		}
@@ -282,7 +286,7 @@ func (r *runner) teardownMgmt(region string, w io.Writer) error {
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%d ACK resource(s) still present after 35m.\n"+
-				"Check for a terminal condition:  kubectl get %s -n aws-inference", n, kinds)
+				"Check for a terminal condition:  kubectl get %s -n aws-inference", n, ackKinds)
 		}
 		fmt.Fprintf(w, "    %d remaining…\n", n)
 		time.Sleep(30 * time.Second)
@@ -294,18 +298,46 @@ func (r *runner) teardownMgmt(region string, w io.Writer) error {
 // reasonable proxy for the whole set.
 func (r *runner) waitForDeletionPolicy(kc string, wait time.Duration, w io.Writer) error {
 	deadline := time.Now().Add(wait)
+	var missing []string
 	for {
-		out, err := r.kubectl(kc, "get", "vpc", "-n", "aws-inference",
-			"-o", `jsonpath={.items[*].metadata.annotations.services\.k8s\.aws/deletion-policy}`)
-		if err == nil && strings.Contains(out, "delete") {
-			fmt.Fprintln(w, "    annotation applied")
-			return nil
+		// EVERY resource, not just the VPC. Argo patches these objects one at a
+		// time, so seeing the annotation on one says nothing about the rest —
+		// and the next step halts Argo, freezing whatever has not been patched
+		// yet at the default of retain. That is not hypothetical: checking only
+		// the VPC left three private subnets, a route table and a security
+		// group behind, because ACK dropped their finalizers without deleting
+		// the AWS resources, which puts them beyond ACK's reach entirely.
+		out, err := r.kubectl(kc, "get", ackKinds, "-n", "aws-inference", "-o",
+			`jsonpath={range .items[*]}{.kind}/{.metadata.name}={.metadata.annotations.services\.k8s\.aws/deletion-policy}{"\n"}{end}`)
+		if err == nil {
+			missing = nil
+			total := 0
+			for _, line := range strings.Split(out, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				total++
+				if name, policy, _ := strings.Cut(line, "="); policy != "delete" {
+					missing = append(missing, name)
+				}
+			}
+			if total > 0 && len(missing) == 0 {
+				fmt.Fprintf(w, "    annotation applied to all %d resource(s)\n", total)
+				return nil
+			}
+			if total == 0 {
+				fmt.Fprintln(w, "    no ACK resources present")
+				return nil
+			}
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf(
-				"the deletion-policy annotation has not reached the cluster after %s.\n"+
-					"Deleting now would silently fall back to retain and leave the AWS resources running.\n"+
-					"Check that Argo is syncing:  kubectl get applications -n argocd", wait)
+				"the deletion-policy annotation has not reached %d resource(s) after %s: %s\n"+
+					"Deleting now would silently fall back to retain, and ACK would drop their\n"+
+					"finalizers without deleting the AWS resources — which cannot be undone through ACK.\n"+
+					"Check that Argo is syncing:  kubectl get applications -n argocd",
+				len(missing), wait, strings.Join(missing, ", "))
 		}
 		time.Sleep(15 * time.Second)
 	}
