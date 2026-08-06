@@ -71,9 +71,10 @@ Downstream variants are NOT touched. After updating a base, promote it:
 				}
 
 				// The Space exists. cub has no "sync this Space from a bundle"
-				// operation, so report rather than pretend: re-uploading would
-				// not update it, and blindly deleting and recreating would
-				// break every downstream variant's upstream link.
+				// operation yet (confighubai/confighub#4976), so report rather
+				// than pretend: re-uploading would not update it, and blindly
+				// deleting and recreating would break every downstream
+				// variant's upstream link.
 				if dryRun {
 					fmt.Fprintf(out, "    exists; would check for updates\n")
 					unchanged++
