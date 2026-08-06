@@ -197,6 +197,35 @@ File names in `configs/` are an interface: bundles install with
 `--granularity per-file`, so each file becomes one Unit and renaming a file
 renames a Unit.
 
+### Versioning the plugin
+
+`0.MINOR.PATCH`, and the distinction is not decorative — the number is the only
+thing a reader has to go on when deciding whether an upgrade needs attention.
+
+- **PATCH** — fixes. Something did not work and now does. This is the default,
+  and a release of nothing but fixes is a patch release however many commits it
+  contains.
+- **MINOR** — new commands or flags, or a change that can make a previously
+  working invocation fail: a new gate, a renamed flag, a different default.
+
+Pre-1.0 lets us change anything at any time; it is not a licence to make the
+version meaningless. Bumping MINOR by reflex is how that happens, and v0.7.0 is
+an example — eight commits, all fixes, tagged as though it added something.
+
+Releases are cut from a tag:
+
+```bash
+git tag v0.7.1 && git push origin v0.7.1
+```
+
+If GitHub is not processing push events (it happens), dispatch the workflow
+against the TAG rather than main — the version is derived from the ref, so
+dispatching against main builds a plugin that calls itself `main`:
+
+```bash
+gh workflow run release-plugin.yml --ref v0.7.1
+```
+
 ## Docs
 
 - [dependencies.md](./docs/dependencies.md) — how values cross component boundaries, and the path-escaping trap
