@@ -47,6 +47,7 @@ or its CI. This tool covers what a consumer of the stack does.`,
 		newLinkProfileCmd(),
 		newEnrollCmd(),
 		newCredsCmd(),
+		newTeardownCmd(),
 		newComponentsCmd(),
 		newVersionCmd(),
 	)
