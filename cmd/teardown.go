@@ -50,6 +50,18 @@ detached and the objects removed.`,
 			}
 			w := cmd.OutOrStdout()
 
+			// Verify the CONTROLLERS can reach AWS before deleting anything.
+			//
+			// This is the check whose absence orphaned eight resources: the ACK
+			// credentials had expired, so deleting an object removed it from
+			// Kubernetes while the AWS resource survived — and once the object is
+			// gone, ACK can no longer destroy what it created. Recovery is by hand
+			// in the console. Checking the local CLI is not enough; it is the
+			// Secret mounted into the controllers that has to be live.
+			if err := r.requireControllerCredentials(w); err != nil {
+				return err
+			}
+
 			planes := []Plane{PlaneWorkload, PlaneMgmt}
 			if planeFlag != "" {
 				p, err := ParsePlane(planeFlag)
@@ -167,10 +179,17 @@ func (r *runner) teardownMgmt(region string, w io.Writer) error {
 
 	mgmt, _ := r.discoverClusters()
 	if mgmt == "" {
+		// No management cluster. That is either "already torn down" or "the only
+		// thing that could clean this up is gone" — and those are very different.
+		// Ask AWS rather than assuming either.
+		if err := r.verifyNothingLeft(region, w); err == nil {
+			fmt.Fprintln(w, "  no management cluster, and nothing left in AWS — already torn down")
+			return nil
+		}
 		return fmt.Errorf(
-			"no reachable cluster with an ack-system namespace.\n" +
-				"The ACK controllers are the only thing that can destroy these resources through\n" +
-				"config; without them this has to be done in the AWS console")
+			"no reachable cluster with an ack-system namespace, but AWS resources still exist (above).\n" +
+				"The ACK controllers are the only thing that can destroy these through config.\n" +
+				"Either bring the management cluster back, or remove them in the AWS console")
 	}
 	kc := cubClusterKubeconfig(mgmt)
 
@@ -208,26 +227,23 @@ func (r *runner) teardownMgmt(region string, w io.Writer) error {
 		return err
 	}
 
-	// 2. Detach Argo. Until this happens, selfHeal restores anything deleted —
-	// which makes a teardown look like it worked for about one minute.
-	fmt.Fprintln(w, "  detaching Argo (otherwise selfHeal restores everything)")
-	for _, comp := range ComponentsInPlane(PlaneMgmt) {
-		app := variantSpace(comp.Name, flagVariant)
-		if _, err := r.kubectl(kc, "get", "application", app, "-n", "argocd"); err != nil {
-			continue
-		}
-		// Strip the finalizer first: a plain delete cascades and would delete the
-		// managed resources through Argo rather than through ACK, bypassing the
-		// deletion policy entirely.
-		if _, err := r.kubectl(kc, "patch", "application", app, "-n", "argocd",
-			"--type=merge", "-p", `{"metadata":{"finalizers":[]}}`); err != nil {
-			return fmt.Errorf("removing finalizer from %s: %w", app, err)
-		}
-		if _, err := r.kubectl(kc, "delete", "application", app, "-n", "argocd",
-			"--cascade=orphan"); err != nil {
-			return fmt.Errorf("deleting Application %s: %w", app, err)
-		}
-		fmt.Fprintf(w, "    detached %s\n", app)
+	// 2. Detach Argo — ALL of it, root included.
+	//
+	// Deleting the child Applications is not enough. They are managed by the root
+	// app-of-apps, which recreates them, which recreates the ACK objects, which
+	// recreates the AWS resources. That is not theoretical: it rebuilt a VPC and
+	// a NAT gateway during a teardown that had already deleted them.
+	//
+	// Stopping the application controller is the one action that reliably halts
+	// every reconciliation loop at once, including the root's. Argo is going away
+	// with the cluster anyway, so there is nothing to preserve.
+	fmt.Fprintln(w, "  halting Argo (selfHeal and the root app-of-apps both restore deletions)")
+	if _, err := r.kubectl(kc, "scale", "statefulset", "argocd-application-controller",
+		"-n", "argocd", "--replicas=0"); err != nil {
+		return fmt.Errorf("stopping the Argo application controller: %w", err)
+	}
+	if err := r.waitForArgoStopped(kc, 3*time.Minute, w); err != nil {
+		return err
 	}
 
 	// 3. Delete. ACK retries a deletion whose dependencies are not yet gone, the
@@ -243,6 +259,13 @@ func (r *runner) teardownMgmt(region string, w io.Writer) error {
 	if _, err := r.kubectl(kc, "delete", kinds, "-n", "aws-inference",
 		"--all", "--wait=false"); err != nil {
 		return fmt.Errorf("deleting ACK resources: %w", err)
+	}
+
+	// Karpenter creates an instance profile per EC2NodeClass when spec.role is
+	// used, and nothing in the config owns it. It holds the node role, so the
+	// role's deletion fails with DeleteConflict until the profile is gone.
+	if err := r.releaseKarpenterInstanceProfiles(w); err != nil {
+		return err
 	}
 
 	fmt.Fprintln(w, "  waiting for AWS to converge (this takes ~20 minutes)")
@@ -303,6 +326,14 @@ func (r *runner) deleteConfig(planes []Plane, w io.Writer) error {
 	// inbound links cannot be deleted.
 	spaces = append(spaces, variantSpace(profileComponent, flagVariant))
 
+	// --recursive removes the Space's Releases, Tags, Links, and Units for us.
+	// Doing it by hand means discovering that dependency chain one 400 at a time,
+	// and getting the order wrong.
+	//
+	// NOT --recursive-force: that ignores delete gates, and a delete gate is
+	// someone deliberately marking config as protected (variant create sets them
+	// with --unit-delete-gate). Refusing is the correct response; overriding
+	// should be a decision a human makes, not a flag this command hard-codes.
 	for _, space := range spaces {
 		has, err := r.spaceExists(space)
 		if err != nil {
@@ -311,14 +342,9 @@ func (r *runner) deleteConfig(planes []Plane, w io.Writer) error {
 		if !has {
 			continue
 		}
-		for _, l := range r.listNames(space, "link") {
-			_, _ = r.cub("link", "delete", "--space", space, l)
-		}
-		for _, u := range r.listNames(space, "unit") {
-			_, _ = r.cub("unit", "delete", "--space", space, u)
-		}
-		if _, err := r.cub("space", "delete", space); err != nil {
+		if _, err := r.cub("space", "delete", space, "--recursive"); err != nil {
 			fmt.Fprintf(w, "  could not delete %s: %v\n", space, err)
+			fmt.Fprintln(w, "     (a delete gate will block this; clear it or remove the Space by hand)")
 			continue
 		}
 		fmt.Fprintf(w, "  deleted %s\n", space)
@@ -329,20 +355,6 @@ func (r *runner) deleteConfig(planes []Plane, w io.Writer) error {
 	fmt.Fprintln(w, "  cub cluster down <name>              the kind cluster")
 	fmt.Fprintln(w, "  cub eksinf creds delete-user --yes   the IAM user")
 	return nil
-}
-
-func (r *runner) listNames(space, entity string) []string {
-	out, err := r.cub(entity, "list", "--space", space, "--no-headers")
-	if err != nil {
-		return nil
-	}
-	var names []string
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if f := strings.Fields(line); len(f) > 0 {
-			names = append(names, f[0])
-		}
-	}
-	return names
 }
 
 // verifyNothingLeft checks AWS directly. The Kubernetes view is not evidence: an
@@ -402,5 +414,101 @@ func (r *runner) verifyNothingLeft(region string, w io.Writer) error {
 		return fmt.Errorf("teardown incomplete — see above")
 	}
 	fmt.Fprintln(w, "\nNothing from this stack is running in AWS.")
+	return nil
+}
+
+// requireControllerCredentials verifies the ACK controllers can actually reach
+// AWS, using the Secret mounted into them rather than the caller's own session.
+//
+// Deleting an ACK object while its controller cannot authenticate destroys
+// nothing: the object goes away, the AWS resource stays, and with the object
+// gone ACK can never clean it up. That is unrecoverable through config — the
+// leftovers have to be found and deleted in the console.
+func (r *runner) requireControllerCredentials(w io.Writer) error {
+	mgmt, _ := r.discoverClusters()
+	if mgmt == "" {
+		return nil // teardownMgmt reports this properly; nothing to check yet
+	}
+	kc := cubClusterKubeconfig(mgmt)
+
+	if _, err := r.kubectl(kc, "get", "secret", credsSecret, "-n", ackNamespace); err != nil {
+		return fmt.Errorf(
+			"no %s/%s Secret — the ACK controllers have no AWS credentials.\n"+
+				"Deleting now would remove the Kubernetes objects and strand every AWS\n"+
+				"resource. Run: cub eksinf creds use-existing", ackNamespace, credsSecret)
+	}
+
+	// The controllers log an ExpiredTokenException rather than reporting
+	// unhealthy, so ask them: a recent auth failure in the logs means the mounted
+	// credentials are stale even though every pod looks Running.
+	logs, err := r.kubectl(kc, "logs", "-n", ackNamespace,
+		"-l", "app.kubernetes.io/name=ec2-chart", "--tail=40")
+	if err == nil {
+		for _, marker := range []string{"ExpiredToken", "InvalidClientTokenId", "security token included in the request is expired"} {
+			if strings.Contains(logs, marker) {
+				return fmt.Errorf(
+					"the ACK controllers' AWS credentials look expired (%s in recent logs).\n"+
+						"Refresh before tearing down, or deletions will strand AWS resources:\n"+
+						"  aws sso login && cub eksinf creds refresh", marker)
+			}
+		}
+	}
+	fmt.Fprintln(w, "  ACK controller credentials: present, no recent auth errors")
+	return nil
+}
+
+// waitForArgoStopped blocks until no application-controller pod is running.
+// Proceeding while one is still alive means racing the reconciler.
+func (r *runner) waitForArgoStopped(kc string, wait time.Duration, w io.Writer) error {
+	deadline := time.Now().Add(wait)
+	for {
+		out, err := r.kubectl(kc, "get", "pods", "-n", "argocd",
+			"-l", "app.kubernetes.io/name=argocd-application-controller", "-o", "name")
+		if err == nil && strings.TrimSpace(out) == "" {
+			fmt.Fprintln(w, "    Argo stopped")
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the Argo application controller is still running after %s; "+
+				"deleting now would race it", wait)
+		}
+		time.Sleep(10 * time.Second)
+	}
+}
+
+// releaseKarpenterInstanceProfiles detaches and deletes the instance profiles
+// Karpenter created.
+//
+// When an EC2NodeClass sets spec.role, Karpenter creates an instance profile to
+// hold it. Nothing in this repo's config declares that profile, so nothing
+// deletes it — and while it exists, deleting the node role fails with
+// DeleteConflict: "must remove roles from instance profile first". The IAM role
+// then hangs as ACK.Recoverable indefinitely.
+func (r *runner) releaseKarpenterInstanceProfiles(w io.Writer) error {
+	out, err := r.aws("iam", "list-instance-profiles",
+		"--query", "InstanceProfiles[].InstanceProfileName", "--output", "text")
+	if err != nil {
+		fmt.Fprintf(w, "    could not list instance profiles (%v); the node role may hang on DeleteConflict\n", err)
+		return nil
+	}
+	for _, profile := range strings.Fields(out) {
+		// Karpenter names them <clusterName>_<hash>.
+		if !strings.HasPrefix(profile, "inference-demo_") {
+			continue
+		}
+		roles, err := r.aws("iam", "get-instance-profile", "--instance-profile-name", profile,
+			"--query", "InstanceProfile.Roles[].RoleName", "--output", "text")
+		if err == nil {
+			for _, role := range strings.Fields(roles) {
+				_, _ = r.aws("iam", "remove-role-from-instance-profile",
+					"--instance-profile-name", profile, "--role-name", role)
+			}
+		}
+		if _, err := r.aws("iam", "delete-instance-profile", "--instance-profile-name", profile); err != nil {
+			fmt.Fprintf(w, "    could not delete instance profile %s: %v\n", profile, err)
+			continue
+		}
+		fmt.Fprintf(w, "    released Karpenter instance profile %s\n", profile)
+	}
 	return nil
 }
