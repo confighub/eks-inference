@@ -58,3 +58,25 @@ func TestExtractJSONString(t *testing.T) {
 		t.Errorf("nested in array = %q, want w-123", got)
 	}
 }
+
+func TestAccessEntryPrincipal(t *testing.T) {
+	cases := map[string]string{
+		// An SSO login reports the session, not the role. EKS wants the role.
+		"arn:aws:sts::025066259430:assumed-role/AWSReservedSSO_Admin_abc/jesper@confighub.com": "arn:aws:iam::025066259430:role/AWSReservedSSO_Admin_abc",
+		"arn:aws:sts::025066259430:assumed-role/SomeRole/session-name":                         "arn:aws:iam::025066259430:role/SomeRole",
+		// An IAM user is already the right shape.
+		"arn:aws:iam::025066259430:user/Local": "arn:aws:iam::025066259430:user/Local",
+		"arn:aws:iam::025066259430:role/Plain": "arn:aws:iam::025066259430:role/Plain",
+		// Partitions other than aws must survive.
+		"arn:aws-us-gov:sts::1:assumed-role/R/s": "arn:aws-us-gov:iam::1:role/R",
+		// Anything unrecognised is returned unchanged rather than mangled.
+		"":                                  "",
+		"not-an-arn":                        "not-an-arn",
+		"arn:aws:sts::1:federated-user/bob": "arn:aws:sts::1:federated-user/bob",
+	}
+	for in, want := range cases {
+		if got := accessEntryPrincipal(in); got != want {
+			t.Errorf("accessEntryPrincipal(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

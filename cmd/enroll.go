@@ -3,10 +3,12 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -48,6 +50,7 @@ type enrollOpts struct {
 	noArgoCD    bool
 
 	noPlaceholderGate bool
+	grantAccess       bool
 }
 
 func newEnrollRunCmd() *cobra.Command {
@@ -80,7 +83,7 @@ func newEnrollRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := r.enrollPreflight(kc, w); err != nil {
+			if err := r.enrollPreflight(kc, &o, w); err != nil {
 				return err
 			}
 			if err := r.enrollConfigHubSide(&o, w); err != nil {
@@ -115,6 +118,8 @@ func newEnrollRunCmd() *cobra.Command {
 	c.Flags().StringVar(&o.argoNS, "argocd-namespace", "argocd", "namespace to install Argo CD into")
 	c.Flags().StringVar(&o.ociRegistry, "oci-registry", "", "override the OCI registry (derived from the cub context by default)")
 	c.Flags().BoolVar(&o.noArgoCD, "no-argocd", false, "do not install Argo CD; fail if it is absent")
+	c.Flags().BoolVar(&o.grantAccess, "grant-access", false,
+		"grant your AWS identity cluster-admin on the EKS cluster if it has no access entry")
 	c.Flags().BoolVar(&o.noPlaceholderGate, "no-placeholder-gate", false,
 		"skip the default vet-placeholders Trigger, allowing Releases with unfilled placeholders")
 	return c
@@ -148,9 +153,104 @@ func (r *runner) resolveEnrollKubeconfig(o *enrollOpts, w interface{ Write([]byt
 	return path, nil
 }
 
-func (r *runner) enrollPreflight(kc string, w interface{ Write([]byte) (int, error) }) error {
+// accessEntryPrincipal converts the caller's STS identity into the ARN an EKS
+// access entry actually takes.
+//
+// sts:GetCallerIdentity returns the SESSION for anything assumed — an SSO login
+// reports arn:aws:sts::123:assumed-role/AWSReservedSSO_Admin_abc/user@example.com
+// — and EKS wants the underlying role, arn:aws:iam::123:role/AWSReservedSSO_Admin_abc.
+// Passing the session ARN is accepted by nothing and the error does not explain
+// why. An IAM user ARN needs no conversion.
+func accessEntryPrincipal(callerARN string) string {
+	parts := strings.Split(callerARN, ":")
+	if len(parts) < 6 || parts[2] != "sts" {
+		return callerARN
+	}
+	res := strings.SplitN(parts[5], "/", 3)
+	if len(res) < 2 || res[0] != "assumed-role" {
+		return callerARN
+	}
+	return fmt.Sprintf("arn:%s:iam::%s:role/%s", parts[1], parts[4], res[1])
+}
+
+// diagnoseUnreachable explains a cluster that authenticates nobody.
+//
+// This is a cliff the stack creates for itself: ACK builds the cluster as the
+// dedicated eks-inference-ack identity, so THAT principal is the one EKS grants
+// bootstrap admin to. The human running enroll is a different identity with no
+// access entry, and gets a bare 401 that says nothing about why.
+func (r *runner) diagnoseUnreachable(kc string, o *enrollOpts, w io.Writer) error {
+	generic := fmt.Errorf("cannot reach the cluster with that kubeconfig")
+	if o.eksCluster == "" || o.region == "" {
+		return generic
+	}
+	id, err := r.callerIdentity()
+	if err != nil {
+		return generic
+	}
+	principal := accessEntryPrincipal(id.Arn)
+
+	out, err := r.aws("eks", "list-access-entries", "--cluster-name", o.eksCluster,
+		"--region", o.region, "--output", "json")
+	if err != nil {
+		return generic
+	}
+	var entries struct {
+		AccessEntries []string `json:"accessEntries"`
+	}
+	if err := json.Unmarshal([]byte(out), &entries); err != nil {
+		return generic
+	}
+	for _, e := range entries.AccessEntries {
+		if e == principal {
+			// It has access and still cannot connect, so this is not the
+			// access-entry problem and saying so would send them the wrong way.
+			return generic
+		}
+	}
+
+	if !o.grantAccess {
+		return fmt.Errorf(
+			"the cluster rejects your credentials: %s has no EKS access entry.\n"+
+				"ACK created this cluster as its own identity, so that principal holds the\n"+
+				"bootstrap admin access and yours was never granted any.\n"+
+				"Re-run with --grant-access to add it, or do it by hand:\n"+
+				"  aws eks create-access-entry --cluster-name %s --region %s \\\n"+
+				"    --principal-arn %s --type STANDARD\n"+
+				"  aws eks associate-access-policy --cluster-name %s --region %s \\\n"+
+				"    --principal-arn %s --access-scope type=cluster \\\n"+
+				"    --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy",
+			principal, o.eksCluster, o.region, principal, o.eksCluster, o.region, principal)
+	}
+
+	fmt.Fprintf(w, "  granting %s cluster-admin access\n", principal)
+	if _, err := r.aws("eks", "create-access-entry", "--cluster-name", o.eksCluster,
+		"--region", o.region, "--principal-arn", principal, "--type", "STANDARD"); err != nil {
+		return fmt.Errorf("creating the access entry for %s: %w", principal, err)
+	}
+	if _, err := r.aws("eks", "associate-access-policy", "--cluster-name", o.eksCluster,
+		"--region", o.region, "--principal-arn", principal, "--access-scope", "type=cluster",
+		"--policy-arn", "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"); err != nil {
+		return fmt.Errorf("associating the admin policy for %s: %w", principal, err)
+	}
+
+	// The entry is not effective immediately; it took about 30s in practice.
+	deadline := time.Now().Add(3 * time.Minute)
+	for !r.reachable(kc) {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("granted access to %s but the cluster still rejects it after 3m", principal)
+		}
+		time.Sleep(10 * time.Second)
+	}
+	fmt.Fprintln(w, "  access granted")
+	return nil
+}
+
+func (r *runner) enrollPreflight(kc string, o *enrollOpts, w interface{ Write([]byte) (int, error) }) error {
 	if !r.reachable(kc) {
-		return fmt.Errorf("cannot reach the cluster with that kubeconfig")
+		if err := r.diagnoseUnreachable(kc, o, w); err != nil {
+			return err
+		}
 	}
 	// Installing Argo CD needs cluster-admin. Fail here rather than halfway
 	// through applying a 20k-line manifest.
