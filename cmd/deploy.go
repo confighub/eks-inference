@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -19,20 +20,24 @@ var noCredsCheck bool
 // the SDK reads the file once at startup a later `creds` write needs a restart
 // to take effect. Every one of those failure modes reads like the stack is
 // broken. This turns it into one sentence, before anything is created.
-func (r *runner) requireCredsSecret(w io.Writer) error {
-	mgmt, _ := r.discoverClusters()
-	if mgmt == "" {
-		// Nothing deployed yet, so there is no ack-system namespace to look in
-		// and no controllers to get this wrong. Check the only cluster it could
-		// be, and stay quiet if we cannot identify one — --target is what
-		// actually decides where this goes, not discovery.
-		all, err := r.reachableClusters()
-		if err != nil || len(all) != 1 {
-			return nil
-		}
-		mgmt = all[0]
+func (r *runner) requireCredsSecret(target string, w io.Writer) error {
+	// Derive the cluster from --target rather than from discovery. Discovery
+	// identifies the management cluster by its ack-system namespace, which does
+	// not exist before the first deploy — precisely the moment this check is for
+	// — and on a machine with several cub-managed clusters there is nothing to
+	// single one out. --target names it outright: `cub cluster up --name X`
+	// creates Space X holding target X/target, so the Space IS the cluster.
+	mgmt, _, ok := strings.Cut(target, "/")
+	if !ok || mgmt == "" {
+		return nil
 	}
 	kc := cubClusterKubeconfig(mgmt)
+	if !r.reachable(kc) {
+		// Not a cub-cluster target, or its kubeconfig is gone. Either way this
+		// check cannot speak to it, and refusing on that basis would block a
+		// deploy for a reason that has nothing to do with credentials.
+		return nil
+	}
 	if _, err := r.kubectl(kc, "get", "secret", credsSecret, "-n", ackNamespace); err != nil {
 		return fmt.Errorf(
 			"no %s/%s Secret in cluster %q.\n"+
@@ -86,7 +91,7 @@ ships at replicas: 0, so a deploy costs nothing until you ask for capacity.`,
 				return err
 			}
 			if plane == PlaneMgmt && !noCredsCheck && !dryRun {
-				if err := r.requireCredsSecret(cmd.OutOrStdout()); err != nil {
+				if err := r.requireCredsSecret(target, cmd.OutOrStdout()); err != nil {
 					return err
 				}
 			}
