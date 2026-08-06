@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -461,16 +463,48 @@ most dangerous step here.`,
 
 // extractJSONString pulls a string field out of cub's nested JSON without
 // modelling the whole entity, which varies by command.
+//
+// This parses rather than scans. The previous version searched for the literal
+// `"key":"`, which silently found nothing the moment cub pretty-printed its
+// output with a space after the colon — reporting "could not read SpaceID" for
+// a Space that existed and whose JSON contained the field.
 func extractJSONString(blob, key string) string {
-	needle := `"` + key + `":"`
-	i := strings.Index(blob, needle)
-	if i < 0 {
+	var doc any
+	if err := json.Unmarshal([]byte(blob), &doc); err != nil {
 		return ""
 	}
-	rest := blob[i+len(needle):]
-	j := strings.IndexByte(rest, '"')
-	if j < 0 {
-		return ""
+	return findJSONString(doc, key)
+}
+
+// findJSONString walks the decoded document for the first string value under
+// key, at any depth. cub nests entities differently per command (Space.SpaceID,
+// BridgeWorker.BridgeWorkerID), and the depth is not worth encoding at each
+// call site.
+func findJSONString(node any, key string) string {
+	switch v := node.(type) {
+	case map[string]any:
+		if s, ok := v[key].(string); ok {
+			return s
+		}
+		// Deterministic order: map iteration is randomised, and a document with
+		// the key at two depths would otherwise return a different answer per
+		// run.
+		names := make([]string, 0, len(v))
+		for k := range v {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, k := range names {
+			if s := findJSONString(v[k], key); s != "" {
+				return s
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if s := findJSONString(item, key); s != "" {
+				return s
+			}
+		}
 	}
-	return rest[:j]
+	return ""
 }

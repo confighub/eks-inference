@@ -157,6 +157,18 @@ Failure modes, in the order you will meet them:
   ```
   `ACK.Recoverable` means it will retry; `ACK.Terminal` means it has given up and
   the message says why.
+- **A permission is fixed but nothing moves.** ACK backs off exponentially, so
+  after several failures the next retry can be many minutes away — long enough
+  to look stuck. The referencing resource also keeps its stale
+  `Reference resolution failed` condition until it next reconciles, so the
+  status contradicts the resource it names, which by then reads
+  `ACK.ResourceSynced=True`. Restart the controller to force a fresh pass:
+  ```bash
+  kubectl -n ack-system rollout restart deployment ack-eks-eks-chart
+  ```
+  This is why credentials belong in the cluster *before* the controllers start:
+  the backoff you avoid is the one you would otherwise sit through.
+
 - **Everything reconciles, but into the wrong region** — the region comes from
   the `platform-profile` Unit, not from your AWS profile. If they disagree,
   resources appear in a region your CLI is not looking at.
