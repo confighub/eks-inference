@@ -148,6 +148,11 @@ var profileEnvBindings = []envBinding{
 	{"ack-controllers", "ec2-controller", "region", "controller", "AWS_REGION"},
 	{"ack-controllers", "iam-controller", "region", "controller", "AWS_REGION"},
 	{"ack-controllers", "eks-controller", "region", "controller", "AWS_REGION"},
+	// Karpenter needs this for the same reason but a different cause: the chart
+	// supplies no region, and under EKS Pod Identity nothing injects one, so
+	// without this it falls back to IMDS and panics. See the comment in
+	// src/karpenter/values/karpenter.yaml.
+	{"karpenter", "karpenter-controller", "region", "controller", "AWS_REGION"},
 }
 
 type resourceRef struct {

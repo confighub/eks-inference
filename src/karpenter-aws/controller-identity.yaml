@@ -116,6 +116,7 @@ spec:
               "iam:CreateInstanceProfile",
               "iam:DeleteInstanceProfile",
               "iam:GetInstanceProfile",
+              "iam:ListInstanceProfiles",
               "iam:RemoveRoleFromInstanceProfile",
               "iam:TagInstanceProfile"
             ],

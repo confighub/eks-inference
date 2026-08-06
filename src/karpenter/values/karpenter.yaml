@@ -32,6 +32,25 @@ serviceAccount:
 replicas: 1
 
 controller:
+  # AWS_REGION is NOT optional here, and nothing in the chart supplies it.
+  #
+  # Karpenter resolves its region from IMDS when the variable is absent. Under
+  # IRSA that still worked, because the IRSA webhook injects AWS_REGION into
+  # every annotated pod. EKS Pod Identity — which is what this stack uses —
+  # injects only the credential variables, so the fallback is reached and then
+  # fails: EKS restricts pod access to IMDS, so the lookup times out and the
+  # controller panics on startup rather than degrading.
+  #
+  #   panic: unable to determine region from IMDS: operation error ec2imds:
+  #   GetRegion, canceled, context deadline exceeded
+  #
+  # Filled per variant by a link from platform-profile, same as the three ACK
+  # controllers. The placeholder is what makes forgetting it a release-time
+  # failure instead of a CrashLoop.
+  env:
+    - name: AWS_REGION
+      value: confighubplaceholder
+
   resources:
     requests:
       cpu: 200m

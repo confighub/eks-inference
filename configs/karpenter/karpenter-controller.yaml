@@ -416,6 +416,8 @@ spec:
               value: "1m"
             - name: SUBNET_REFRESH_INTERVAL
               value: "1m"
+            - name: AWS_REGION
+              value: confighubplaceholder
           ports:
             - name: http-metrics
               containerPort: 8080
