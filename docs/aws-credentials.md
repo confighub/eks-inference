@@ -110,6 +110,19 @@ Cluster resource fails with an authorization error naming the *role*, not the
 missing permission. The condition matters too — unconditioned `iam:PassRole`
 alongside `iam:CreateRole` lets this user grant itself anything.
 
+The IAM actions are the fiddly part, and the failure they produce is
+misleading. ACK's Role controller calls `iam:ListRolePolicies` on every read to
+compare inline policies against the spec. Without it the role is still
+*created* — so AWS shows exactly what you expect — but it never reaches
+`ACK.ResourceSynced`, and anything referencing it blocks with "the referenced
+resource is not synced yet". The stack stalls behind a role that exists and is
+correct.
+
+Testing this policy requires actually running as it. Under an
+AdministratorAccess SSO session the embedded policy is never the effective
+identity, so no amount of end-to-end success says anything about whether it is
+complete. `create-user` is the only path that exercises it.
+
 `ec2:*` and `eks:*` are still blunt. Adequate for a demo account; not appropriate
 for an account with anything else in it. AWS publishes tighter per-service
 policies at

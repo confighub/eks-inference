@@ -82,8 +82,26 @@ sessions, and rotation.
 
 ## 5. Publish a release and let Argo pull it
 
+`cub eksinf deploy` does this, and the order inside it is not cosmetic: it
+creates every variant in the plane, links them to the `platform-profile` and
+resolves them, and only then publishes.
+
+That order is forced by the gate. Publishing is refused while any
+`confighubplaceholder` remains, and the links are what fill them — so a
+create-then-publish loop over one component at a time cannot work. The first
+publish would happen while the rest of the plane is still placeholders:
+
+```
+HTTP 422: outstanding ApplyGates; triggers re-queued for evaluation
+```
+
+Creating a link is also not sufficient on its own. A Link records the
+relationship but does not rewrite the downstream Unit — the Unit keeps its
+placeholders until it is resolved, which is why `deploy` resolves as part of
+linking rather than leaving it to the operator.
+
 ```bash
-cub release publish aws-network-dev
+cub release publish aws-network-dev   # what deploy does per component
 ```
 
 > **Verified.** `cub variant create --target` auto-creates the child Argo CD

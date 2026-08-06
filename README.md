@@ -56,9 +56,16 @@ cub eksinf enroll cluster --name inference-demo \
 
 # 8. Deploy Karpenter, the GPU runtime, and the workloads.
 cub eksinf deploy --plane workload --target inference-demo/target
+```
 
-# 9. Give the duplicated values a single owner.
-cub eksinf link-profile
+`deploy` links each plane to the `platform-profile` itself, between creating the
+variants and publishing them — it has to, since publishing is gated on there
+being no unfilled placeholders left. `cub eksinf link-profile` is still there to
+inspect or rework the links after the fact:
+
+```bash
+cub eksinf link-profile --list      # show the bindings and existing links
+cub eksinf link-profile --unlink    # remove them
 ```
 
 Nothing is running yet beyond the system nodegroup: every workload ships at
