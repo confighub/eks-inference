@@ -31,6 +31,8 @@ The Secret is written straight to the cluster and is never a ConfigHub Unit:
 cub refuses to upload rendered Secrets, and these bundles are public. It is
 therefore also invisible to Argo — never pruned, never reported as drift.`,
 	}
+	c.PersistentFlags().StringVar(&credsCluster, "cluster", "",
+		"management cluster to write to (default: discovered)")
 	c.AddCommand(
 		newCredsStatusCmd(),
 		newCredsUseExistingCmd(),
@@ -80,6 +82,10 @@ func (r *runner) callerIdentity() (*callerIdentity, error) {
 	return &id, nil
 }
 
+// credsCluster names the management cluster explicitly, for the case where
+// discovery cannot choose on its own.
+var credsCluster string
+
 // mgmtKubeconfig resolves the kind cluster running the ACK controllers, failing
 // loudly rather than falling back to whatever kubectl happens to point at.
 func (r *runner) mgmtKubeconfig() (string, error) {
@@ -91,6 +97,60 @@ func (r *runner) mgmtKubeconfig() (string, error) {
 			ackNamespace)
 	}
 	return cubClusterKubeconfig(mgmt), nil
+}
+
+// mgmtKubeconfigForWrite is mgmtKubeconfig for the commands that WRITE the
+// Secret, and it deliberately accepts a cluster where nothing is deployed yet.
+//
+// Credentials belong in the cluster before the controllers first start, not
+// after: a controller that starts without them CrashLoops, and one that starts
+// with expired ones burns reconcile attempts against an API that is refusing
+// it. But discovery identifies the management cluster BY the ack-system
+// namespace, which does not exist until ack-controllers is deployed — so on a
+// fresh cluster the very command you need to run first cannot find it.
+//
+// A pre-deploy cluster has no positive marker, only the absence of one, so this
+// accepts it only when there is exactly one candidate and therefore nothing to
+// get wrong. Two candidates is a real ambiguity and asks rather than guesses.
+func (r *runner) mgmtKubeconfigForWrite(w io.Writer) (string, error) {
+	if credsCluster != "" {
+		kc := cubClusterKubeconfig(credsCluster)
+		if !r.reachable(kc) {
+			return "", fmt.Errorf("cluster %q is not reachable", credsCluster)
+		}
+		return kc, nil
+	}
+
+	mgmt, workload := r.discoverClusters()
+	if mgmt != "" {
+		return cubClusterKubeconfig(mgmt), nil
+	}
+
+	all, err := r.reachableClusters()
+	if err != nil {
+		return "", err
+	}
+	var candidates []string
+	for _, name := range all {
+		if name != workload {
+			candidates = append(candidates, name)
+		}
+	}
+	switch len(candidates) {
+	case 0:
+		return "", fmt.Errorf(
+			"no reachable cub-managed cluster.\n" +
+				"Start one with: cub cluster up --name <name>")
+	case 1:
+		fmt.Fprintf(w, "  %s has no %s namespace yet — writing credentials ahead of the controllers\n",
+			candidates[0], ackNamespace)
+		return cubClusterKubeconfig(candidates[0]), nil
+	default:
+		return "", fmt.Errorf(
+			"more than one cluster could be the management cluster (%s),\n"+
+				"and none has an %s namespace to identify it. Name one with --cluster",
+			strings.Join(candidates, ", "), ackNamespace)
+	}
 }
 
 // writeSecret creates or rotates the credentials Secret and restarts the
@@ -135,9 +195,22 @@ func (r *runner) writeSecret(kubeconfig string, c *exportedCreds, w io.Writer) e
 	}
 	fmt.Fprintf(w, "  wrote Secret %s/%s\n", ackNamespace, credsSecret)
 
-	if _, err := r.kubectl(kubeconfig, "rollout", "restart", "deployment", "-n", ackNamespace); err == nil {
-		fmt.Fprintf(w, "  restarted controllers in %s\n", ackNamespace)
+	// No Deployments is the expected state when credentials are written before
+	// the controllers are deployed, which is the recommended order. Say which
+	// case this is rather than printing nothing and leaving it ambiguous.
+	deploys, err := r.kubectl(kubeconfig, "get", "deployment", "-n", ackNamespace,
+		"-o", "name")
+	if err != nil {
+		return err
 	}
+	if strings.TrimSpace(deploys) == "" {
+		fmt.Fprintf(w, "  no controllers deployed yet; they will read this at startup\n")
+		return nil
+	}
+	if _, err := r.kubectl(kubeconfig, "rollout", "restart", "deployment", "-n", ackNamespace); err != nil {
+		return fmt.Errorf("restarting controllers in %s: %w", ackNamespace, err)
+	}
+	fmt.Fprintf(w, "  restarted controllers in %s\n", ackNamespace)
 	return nil
 }
 
@@ -198,7 +271,7 @@ but they cannot be scoped and cannot be revoked independently.`,
 				fmt.Fprintf(w, "  type:       permanent IAM user key\n")
 			}
 
-			kc, err := r.mgmtKubeconfig()
+			kc, err := r.mgmtKubeconfigForWrite(w)
 			if err != nil {
 				return err
 			}
@@ -243,7 +316,7 @@ happening.`,
 			if left, ok := remaining(c.Expiration); ok {
 				fmt.Fprintf(w, "  expires in: %s\n", left)
 			}
-			kc, err := r.mgmtKubeconfig()
+			kc, err := r.mgmtKubeconfigForWrite(w)
 			if err != nil {
 				return err
 			}

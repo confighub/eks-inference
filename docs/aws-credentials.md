@@ -7,6 +7,23 @@ credentials. In kind neither is available, so they need a credentials file.
 This is the least pleasant part of the stack, and deliberately the only step that
 is not config.
 
+## When
+
+**Before deploying `ack-controllers`, not after.** The AWS SDK reads the
+credentials file once at process start, so a controller that starts without a
+usable Secret CrashLoops until one appears, and one that starts with expired
+credentials keeps its stale copy even after the Secret is corrected. Writing the
+Secret first makes both cases impossible, and makes a bad identity fail against
+`sts:GetCallerIdentity` in a second rather than as an `ACK.Recoverable`
+condition on a VPC some minutes later.
+
+The write-modes work on a cluster where nothing is deployed yet — they create
+the `ack-system` namespace themselves. The one wrinkle: these commands normally
+find the management cluster *by* that namespace, so on a fresh cluster they fall
+back to "the only reachable cub-managed cluster". With more than one candidate
+that is a genuine ambiguity, and they ask for `--cluster <name>` rather than
+pick one.
+
 ## Use the plugin
 
 ```bash

@@ -132,7 +132,7 @@ Inspect it with --show-policy before running.`,
 			}
 			fmt.Fprintln(w, "  key is live")
 
-			kc, err := r.mgmtKubeconfig()
+			kc, err := r.mgmtKubeconfigForWrite(w)
 			if err != nil {
 				return err
 			}

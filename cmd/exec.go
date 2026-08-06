@@ -163,6 +163,23 @@ func cubClusterKubeconfig(name string) string {
 	return filepath.Join(home, ".confighub", "clusters", name+".kubeconfig")
 }
 
+// reachableClusters lists the cub-managed clusters that answer, without
+// regard to what is deployed to them.
+func (r *runner) reachableClusters() ([]string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	paths, _ := filepath.Glob(filepath.Join(home, ".confighub", "clusters", "*.kubeconfig"))
+	var names []string
+	for _, p := range paths {
+		if r.reachable(p) {
+			names = append(names, strings.TrimSuffix(filepath.Base(p), ".kubeconfig"))
+		}
+	}
+	return names, nil
+}
+
 // discoverClusters finds the mgmt and workload clusters among the cub-managed
 // kubeconfigs, identifying each by what is deployed to it. Only reachable
 // clusters are considered, so an unreachable one is reported as such rather

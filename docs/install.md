@@ -54,7 +54,33 @@ Find the OCI target slug with:
 cub target list --space inference-mgmt
 ```
 
-## 4. Publish a release and let Argo pull it
+## 4. Credentials — before the controllers, not after
+
+```bash
+cub eksinf creds use-existing     # or: creds create-user
+```
+
+Do this **before** publishing. The controllers read their credentials once at
+startup, so a controller that starts without them CrashLoops, and one that starts
+with credentials it cannot use burns reconcile attempts against an API that is
+refusing it. Neither is harmful — ACK recovers — but both are noise that looks
+like a failure, and the fix in each case is a restart the plugin would have to
+issue anyway.
+
+Writing the Secret first also means a missing or invalid identity fails here,
+against `sts:GetCallerIdentity`, rather than fifteen minutes later as an
+`ACK.Recoverable` condition on a VPC.
+
+The command works on a cluster where nothing is deployed yet: it creates the
+`ack-system` namespace itself. Since it normally identifies the management
+cluster *by* that namespace, on a fresh cluster it falls back to "the only
+reachable cub-managed cluster" — and if there is more than one candidate it asks
+for `--cluster` rather than guessing.
+
+See [aws-credentials.md](./aws-credentials.md) for choosing a mode, SSO
+sessions, and rotation.
+
+## 5. Publish a release and let Argo pull it
 
 ```bash
 cub release publish aws-network-dev
@@ -72,11 +98,6 @@ cub release publish aws-network-dev
 > In practice ACK converges anyway — a resource whose reference cannot resolve
 > requeues rather than fails permanently — so the stack reaches the right state
 > regardless. It is just noisy on the way there.
-
-## 5. Credentials
-
-The controllers will crash-loop until they can read AWS credentials. Follow
-[aws-credentials.md](./aws-credentials.md).
 
 ## 6. Watch it converge
 

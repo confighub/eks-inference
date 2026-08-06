@@ -2,9 +2,49 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 )
+
+// noCredsCheck opts out of the pre-deploy credentials check, for deploying the
+// config deliberately ahead of having an AWS identity to hand.
+var noCredsCheck bool
+
+// requireCredsSecret refuses to deploy the mgmt plane into a cluster that has
+// no AWS credentials.
+//
+// Deploying first is not harmful, just consistently worse: the controllers
+// CrashLoop, or come up and reconcile against an API refusing them, and because
+// the SDK reads the file once at startup a later `creds` write needs a restart
+// to take effect. Every one of those failure modes reads like the stack is
+// broken. This turns it into one sentence, before anything is created.
+func (r *runner) requireCredsSecret(w io.Writer) error {
+	mgmt, _ := r.discoverClusters()
+	if mgmt == "" {
+		// Nothing deployed yet, so there is no ack-system namespace to look in
+		// and no controllers to get this wrong. Check the only cluster it could
+		// be, and stay quiet if we cannot identify one — --target is what
+		// actually decides where this goes, not discovery.
+		all, err := r.reachableClusters()
+		if err != nil || len(all) != 1 {
+			return nil
+		}
+		mgmt = all[0]
+	}
+	kc := cubClusterKubeconfig(mgmt)
+	if _, err := r.kubectl(kc, "get", "secret", credsSecret, "-n", ackNamespace); err != nil {
+		return fmt.Errorf(
+			"no %s/%s Secret in cluster %q.\n"+
+				"The ACK controllers read credentials once at startup, so write them first:\n"+
+				"  cub eksinf creds use-existing      (reuse your AWS identity)\n"+
+				"  cub eksinf creds create-user       (a dedicated, revocable IAM user)\n"+
+				"Pass --no-creds-check to deploy the config anyway",
+			ackNamespace, credsSecret, mgmt)
+	}
+	fmt.Fprintf(w, "  credentials present in %s\n\n", mgmt)
+	return nil
+}
 
 func newDeployCmd() *cobra.Command {
 	var planeFlag, target string
@@ -44,6 +84,11 @@ ships at replicas: 0, so a deploy costs nothing until you ask for capacity.`,
 			r := newRunner()
 			if err := r.requireConfigHubAuth(); err != nil {
 				return err
+			}
+			if plane == PlaneMgmt && !noCredsCheck && !dryRun {
+				if err := r.requireCredsSecret(cmd.OutOrStdout()); err != nil {
+					return err
+				}
 			}
 
 			list := ComponentsInPlane(plane)
@@ -109,6 +154,8 @@ ships at replicas: 0, so a deploy costs nothing until you ask for capacity.`,
 	c.Flags().StringVar(&planeFlag, "plane", "", "plane to deploy (mgmt or workload)")
 	c.Flags().StringVar(&target, "target", "", "target for the cloned Units, as <space>/<target>")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be done, change nothing")
+	c.Flags().BoolVar(&noCredsCheck, "no-creds-check", false,
+		"deploy the mgmt plane without AWS credentials in the cluster")
 	_ = c.MarkFlagRequired("plane")
 	return c
 }

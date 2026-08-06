@@ -32,12 +32,14 @@ cub eksinf install
 # 3. The parameter surface. Its Space has no Target and is never deployed.
 cub variant create dev platform-profile-base
 
-# 4. Deploy the management plane. This creates AWS infrastructure.
-cub eksinf deploy --plane mgmt --target inference-mgmt/target
-
-# 5. Give the ACK controllers AWS credentials. The one out-of-band step —
-#    the Secret is never a ConfigHub Unit.
+# 4. Give the ACK controllers AWS credentials. The one out-of-band step —
+#    the Secret is never a ConfigHub Unit. Do this BEFORE deploying: the
+#    controllers read credentials once at startup, and a bad identity fails
+#    here in a second rather than as a condition on a VPC later.
 cub eksinf creds create-user --yes        # or: creds use-existing
+
+# 5. Deploy the management plane. This creates AWS infrastructure.
+cub eksinf deploy --plane mgmt --target inference-mgmt/target
 
 # 6. Watch it converge. ~5 min for the network, ~15 for the EKS control plane.
 cub eksinf status
