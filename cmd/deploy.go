@@ -109,6 +109,13 @@ ships at replicas: 0, so a deploy costs nothing until you ask for capacity.`,
 				return nil
 			}
 
+			// Three phases, and the order is forced. Publishing is gated on the
+			// config containing no confighubplaceholder values, and the links
+			// from platform-profile are what fill them — so every variant must
+			// exist and be linked BEFORE anything is published. Creating and
+			// publishing one component at a time cannot work: the first publish
+			// happens while the rest are still placeholders.
+			deployed := map[string]bool{}
 			for _, comp := range list {
 				base := baseSpace(comp.Name)
 				down := variantSpace(comp.Name, flagVariant)
@@ -138,15 +145,40 @@ ships at replicas: 0, so a deploy costs nothing until you ask for capacity.`,
 					}
 					fmt.Fprintf(out, "    created variant %s\n", down)
 				}
+				deployed[comp.Name] = true
+			}
 
+			profileSpace := variantSpace(profileComponent, flagVariant)
+			hasProfile, err := r.spaceExists(profileSpace)
+			if err != nil {
+				return fmt.Errorf("checking Space %s: %w", profileSpace, err)
+			}
+			if !hasProfile {
+				return fmt.Errorf(
+					"no Space %q, so the placeholders in this plane have nothing to fill them.\n"+
+						"Publishing would be refused by the vet-placeholders gate. Create it with:\n"+
+						"  cub variant create %s %s-base",
+					profileSpace, flagVariant, profileComponent)
+			}
+			fmt.Fprintf(out, "\n==> linking to %s\n", profileSpace)
+			if err := r.linkProfile(out, profileSpace, deployed); err != nil {
+				return err
+			}
+
+			fmt.Fprintln(out, "==> publishing")
+			for _, comp := range list {
+				if !deployed[comp.Name] {
+					continue
+				}
+				down := variantSpace(comp.Name, flagVariant)
 				changed, err := r.publishRelease(down)
 				if err != nil {
 					return fmt.Errorf("publishing release for %s: %w", down, err)
 				}
 				if changed {
-					fmt.Fprintln(out, "    published release")
+					fmt.Fprintf(out, "  %s: published release\n", comp.Name)
 				} else {
-					fmt.Fprintln(out, "    release already current")
+					fmt.Fprintf(out, "  %s: release already current\n", comp.Name)
 				}
 			}
 

@@ -214,7 +214,7 @@ separate problems and only one of them needs the planes to see each other.`,
 					"no Space %q — create it with:  cub variant create %s %s-base",
 					profileSpace, flagVariant, profileComponent)
 			}
-			return r.linkProfile(out, profileSpace)
+			return r.linkProfile(out, profileSpace, nil)
 		},
 	}
 
@@ -316,11 +316,28 @@ func payloadFor(bs []binding, envs []envBinding) ([]byte, error) {
 	return json.Marshal(p)
 }
 
-func (r *runner) linkProfile(out interface{ Write([]byte) (int, error) }, profileSpace string) error {
+// resolveUnit pulls a Link's values into the downstream Unit's data.
+//
+// Creating a Link records the relationship; it does NOT rewrite the downstream
+// Unit. Until the Unit is resolved it still holds its confighubplaceholder
+// values, so an unresolved Unit is one the vet-placeholders gate will refuse to
+// release — correctly, because the placeholder really is still there.
+func (r *runner) resolveUnit(space, unit string) error {
+	_, err := r.cub("unit", "update", "--space", space, "--patch", "--resolve", "Link:*", unit)
+	return err
+}
+
+// linkProfile creates the profile links and resolves the Units they feed.
+// only restricts it to a set of components; nil means every component that has
+// a variant Space.
+func (r *runner) linkProfile(out interface{ Write([]byte) (int, error) }, profileSpace string, only map[string]bool) error {
 	keys, groups := groupBindings()
 	links, paths := 0, 0
 
 	for _, k := range keys {
+		if only != nil && !only[k.component] {
+			continue
+		}
 		space := variantSpace(k.component, flagVariant)
 		has, err := r.spaceExists(space)
 		if err != nil {
@@ -347,16 +364,19 @@ func (r *runner) linkProfile(out interface{ Write([]byte) (int, error) }, profil
 		for _, e := range envs {
 			fmt.Fprintf(out, "      %-14s -> set-env-var %s/%s\n", e.Field, e.Container, e.EnvVar)
 		}
+		// Resolve immediately rather than printing the command. A link that is
+		// created but never resolved leaves the placeholder in place and looks
+		// like it worked, which is the failure this whole mechanism exists to
+		// prevent.
+		if err := r.resolveUnit(space, k.unit); err != nil {
+			return fmt.Errorf("resolving %s/%s after linking: %w", space, k.unit, err)
+		}
 		links++
 		paths += len(groups[k]) + len(envs)
 	}
 
-	fmt.Fprintf(out, "\nCreated %d link(s) carrying %d path(s) from %s.\n", links, paths, profileSpace)
-	fmt.Fprintln(out, "\nResolve and publish the affected Units:")
-	for _, k := range keys {
-		fmt.Fprintf(out, "  cub unit update --space %s --patch --resolve 'Link:*' %s\n",
-			variantSpace(k.component, flagVariant), k.unit)
-	}
+	fmt.Fprintf(out, "\nCreated %d link(s) carrying %d path(s) from %s, and resolved them.\n",
+		links, paths, profileSpace)
 	return nil
 }
 
