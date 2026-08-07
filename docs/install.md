@@ -149,6 +149,9 @@ between waves is advisory.
 cub eksinf install
 ```
 
+Needs **cub v0.2.14 or newer** — older versions cannot upload into a populated
+Space at all and fail with "already exists".
+
 Re-running install is a re-upload, not a second create. Each Unit is 3-way merged
 against the last upload, which is what makes it safe to run against a populated
 Space:

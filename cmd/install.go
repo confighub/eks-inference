@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -27,8 +28,8 @@ Target and are never deployed; use 'eksinf deploy' for that.
 Run it again whenever the bundles are republished. A re-upload 3-way merges the
 new bundle against the last one, so Unit IDs, target bindings and upstream links
 survive, and anything changed in ConfigHub after the upload survives with them.
-A bundle that has not moved is a no-op. This needs a cub with re-upload support;
-older versions fail here with "already exists".
+A bundle that has not moved is a no-op. Needs cub v0.2.14 or newer; older
+versions have no re-upload and fail here with "already exists".
 
 --prune additionally EMPTIES Units the bundle no longer produces. Off by default,
 because emptying a base Unit propagates to every downstream that promotes from it
@@ -52,6 +53,13 @@ Downstream variants are NOT touched. After updating a base, promote it:
 			r := newRunner()
 			if err := r.requireConfigHubAuth(); err != nil {
 				return err
+			}
+			if !recreate {
+				// --recreate deletes first, so it uploads into an empty Space
+				// and works on any cub. Only the re-upload path has a floor.
+				if err := r.requireCubVersion(minCubVersion); err != nil {
+					return err
+				}
 			}
 			out := cmd.OutOrStdout()
 
@@ -235,4 +243,94 @@ func revertCommand(out string) string {
 		}
 	}
 	return ""
+}
+
+// minCubVersion is a HARD FLOOR for install, for the same reason the Argo CD
+// version is one for enroll: below it the command cannot work, and the way it
+// fails does not say so. cub gained re-upload in v0.2.14; older builds cannot
+// upload into a populated Space and fail with "already exists", which reads
+// like a bug in this plugin rather than a version skew.
+//
+// The plugin installs from GitHub releases and upgrades independently of cub,
+// so the skew is ordinary rather than exotic.
+const minCubVersion = "v0.2.14"
+
+// requireCubVersion fails when the cub on PATH is older than min.
+//
+// An unparseable version — a dev build reports "dev" — is allowed through
+// deliberately. Refusing to run against a locally built cub would block the
+// people most likely to be testing an unreleased one, and the failure it
+// guards against is loud and immediate anyway.
+func (r *runner) requireCubVersion(min string) error {
+	out, err := r.cub("version")
+	if err != nil {
+		return fmt.Errorf("reading cub version: %w", err)
+	}
+	got := parseCubVersion(out)
+	if got == nil {
+		return nil
+	}
+	if compareVersions(got, mustParseVersion(min)) < 0 {
+		return fmt.Errorf(
+			"this needs cub %s or newer for re-upload; found %v.%v.%v.\n"+
+				"Older versions cannot upload into a Space that already has Units and fail\n"+
+				"with \"already exists\". Upgrade cub, or use --recreate to rebuild the bases.",
+			min, got[0], got[1], got[2])
+	}
+	return nil
+}
+
+// parseCubVersion pulls the client semver out of `cub version` output, or nil
+// when there isn't one to find.
+func parseCubVersion(out string) []int {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		rest, ok := strings.CutPrefix(line, "Version:")
+		if !ok {
+			continue
+		}
+		if v := mustParseVersionOrNil(strings.TrimSpace(rest)); v != nil {
+			return v
+		}
+	}
+	return nil
+}
+
+func mustParseVersionOrNil(s string) []int {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
+	parts := strings.SplitN(s, ".", 3)
+	if len(parts) != 3 {
+		return nil
+	}
+	out := make([]int, 3)
+	for i, p := range parts {
+		// Tolerate a pre-release or build suffix on the patch component.
+		p = strings.FieldsFunc(p, func(r rune) bool { return r == '-' || r == '+' })[0]
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return nil
+		}
+		out[i] = n
+	}
+	return out
+}
+
+func mustParseVersion(s string) []int {
+	v := mustParseVersionOrNil(s)
+	if v == nil {
+		panic("unparseable version constant: " + s)
+	}
+	return v
+}
+
+func compareVersions(a, b []int) int {
+	for i := range a {
+		switch {
+		case a[i] < b[i]:
+			return -1
+		case a[i] > b[i]:
+			return 1
+		}
+	}
+	return 0
 }

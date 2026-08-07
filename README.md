@@ -203,7 +203,7 @@ renames a Unit.
 cub eksinf install
 ```
 
-Re-running install takes the current bundles. A re-upload 3-way merges the new
+Re-running install takes the current bundles (needs cub v0.2.14+). A re-upload 3-way merges the new
 bundle against the last one, so Unit IDs, target bindings and links survive, and
 so do changes made in ConfigHub afterwards — which matters here, because
 `link-profile` and the `set-env-var` setters mutate Units after upload. A bundle
