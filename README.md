@@ -199,18 +199,27 @@ renames a Unit.
 
 ### Taking a newer bundle
 
-`cub variant upload` cannot yet refresh an existing base Space from a newer
-bundle (confighubai/confighub#4976), so republishing the bundles does not move
-an installed base. Until that lands the loop is wipe-and-rebuild:
-
 ```bash
-cub eksinf install --recreate
+cub eksinf install
 ```
 
-which deletes each base and uploads it again — and refuses while any downstream
-variant still points at it, because re-uploading mints new UnitIDs and an
-orphaned variant can never be promoted again. Full sequence in
-[docs/install.md](./docs/install.md#wiping-and-starting-over).
+Re-running install takes the current bundles. A re-upload 3-way merges the new
+bundle against the last one, so Unit IDs, target bindings and links survive, and
+so do changes made in ConfigHub afterwards — which matters here, because
+`link-profile` and the `set-env-var` setters mutate Units after upload. A bundle
+that has not moved is a no-op.
+
+Bases are upstreams, so taking a newer one does not move anything that is
+deployed. Promote per variant when you want it:
+
+```bash
+cub variant promote <component>-dev
+cub release publish <component>-dev
+```
+
+`--prune` additionally empties Units the bundle no longer produces; `--recreate`
+deletes and rebuilds, which is only needed to change granularity. See
+[docs/install.md](./docs/install.md#taking-a-newer-bundle).
 
 ### Versioning the plugin
 

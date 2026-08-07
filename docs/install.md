@@ -143,13 +143,66 @@ resources are ready. To make waves actually gate on AWS convergence, add a
 resource customization keyed on `ACK.ResourceSynced`. Without it, ordering
 between waves is advisory.
 
-## Wiping and starting over
+## Taking a newer bundle
 
-Until `cub variant upload` can refresh an existing Space from a newer bundle
-(confighubai/confighub#4976), a base installed today is pinned to today's bundle.
-Republishing the bundle changes nothing about it. So while that feature is
-missing, the way to pick up new config is to wipe and rebuild, and that is the
-normal development loop rather than an exceptional recovery:
+```bash
+cub eksinf install
+```
+
+Re-running install is a re-upload, not a second create. Each Unit is 3-way merged
+against the last upload, which is what makes it safe to run against a populated
+Space:
+
+- **Unit IDs, target bindings and upstream links survive.** Downstream variants
+  keep pointing at the same Units, so `cub variant promote` still works.
+- **Post-upload changes survive too.** This stack depends on that: `link-profile`
+  writes values into Units after upload, and the `set-env-var` setters rewrite
+  `AWS_REGION`. Replace-semantics would silently undo exactly the wiring that
+  makes `platform-profile` work.
+- **An unchanged bundle is a no-op**, so it is safe to run on a schedule.
+
+Bases are upstreams and are never deployed, so this moves nothing that is
+running. Promote per variant when you want the change:
+
+```bash
+cub variant promote karpenter-dev
+cub release publish karpenter-dev
+```
+
+### --prune
+
+Off by default. It EMPTIES Units the bundle no longer produces — it never deletes
+them, so the Unit record, its ID and its bindings survive with no content, and
+the resources they contributed are removed on the next apply.
+
+Default-off because emptying a base Unit propagates to every downstream that
+promotes from it. That is right when a resource was genuinely dropped upstream,
+and wrong when you are pointing install at a partial bundle by mistake, so it is
+a decision rather than a default.
+
+### --recreate
+
+Deletes each base Space and uploads it again, and refuses while any downstream
+variant still points at it.
+
+It exists for exactly one case: **changing granularity.** Granularity determines
+which Units exist, so changing it cannot preserve links by any mechanism — the
+Units the links point at stop existing. Deleting and rebuilding is the honest
+expression of that, not a workaround for a missing feature. cub itself refuses a
+re-upload at a different granularity than the Space was created with:
+
+```
+Failed: Space "karpenter-base" was uploaded with --granularity per-file,
+but this upload specifies minimal.
+```
+
+For every other case — a chart bump, a bug fix, a new resource — a plain
+re-upload is correct and non-destructive.
+
+## Starting completely over
+
+Rarely needed now that a re-upload tracks the bundles. When you do want the org
+empty — abandoning a stack rather than updating one:
 
 ```bash
 # 1. AWS, then this stack's variant Spaces (8 components + the profile).
@@ -162,15 +215,9 @@ cub eksinf enroll remove --name inference-demo --delete-spaces --yes
 # 3. The management cluster, its Spaces, and argobot's.
 cub cluster down --name inference-mgmt --delete-config
 
-# 4. Replace the bases with the current bundles.
-cub eksinf install --recreate
+# 4. Bases, if you want those gone too.
+cub space delete <component>-base --recursive
 ```
 
-Order matters in exactly one place, and `--recreate` enforces it rather than
-trusting you: it refuses to delete a base while any downstream variant still
-points at it. Deleting the base first would orphan those variants permanently —
-re-uploading produces Units with new IDs, so the upstream link cannot be
-restored and `cub variant promote` has nothing to promote. Being out of date is
-recoverable; being orphaned is not.
-
-Step 4 alone is enough when only the bundles changed and nothing is deployed.
+Bases can usually stay: they are current as of the last `install`, carry no
+Target, and cost nothing.

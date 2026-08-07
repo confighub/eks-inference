@@ -411,8 +411,10 @@ func (r *runner) linkProfile(out interface{ Write([]byte) (int, error) }, profil
 		// Create if absent, patch if present. --allow-exists is NOT sufficient
 		// here: it tolerates the existing Link without touching its paths, so a
 		// binding added to this table later would never reach a stack that had
-		// already been linked, and the command would report success. That is
-		// the same trap as `cub variant upload --allow-exists`.
+		// already been linked, and the command would report success.
+		//
+		// `cub variant upload` used to have the same gap and now reconciles on
+		// re-upload; `cub link create` still only tolerates, so this stays.
 		existing, err := r.findLink(space, k.unit, profileSpace, profileUnit)
 		if err != nil {
 			return err

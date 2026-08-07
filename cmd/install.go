@@ -14,7 +14,7 @@ const defaultRegistry = "ghcr.io/confighub/configs/eks-inference"
 
 func newInstallCmd() *cobra.Command {
 	var registry string
-	var dryRun, recreate bool
+	var dryRun, recreate, prune bool
 
 	c := &cobra.Command{
 		Use:   "install",
@@ -24,11 +24,22 @@ func newInstallCmd() *cobra.Command {
 Bases are the shared upstream that variants clone from. They are not bound to a
 Target and are never deployed; use 'eksinf deploy' for that.
 
-CREATE OR UPDATE, not create-if-absent. 'cub variant upload --allow-exists'
-TOLERATES existing Units, it does not update them — re-running it against a newer
-bundle reports success, changes nothing, and leaves the base stale, after which
-'cub variant promote' also succeeds with nothing to propagate. Two green commands
-and no change. This sends the update explicitly and reports what actually moved.
+Run it again whenever the bundles are republished. A re-upload 3-way merges the
+new bundle against the last one, so Unit IDs, target bindings and upstream links
+survive, and anything changed in ConfigHub after the upload survives with them.
+A bundle that has not moved is a no-op. This needs a cub with re-upload support;
+older versions fail here with "already exists".
+
+--prune additionally EMPTIES Units the bundle no longer produces. Off by default,
+because emptying a base Unit propagates to every downstream that promotes from it
+— which is right when a resource was genuinely dropped upstream, and wrong when
+you are installing a partial bundle by mistake. Nothing is ever deleted either
+way: the Unit record, its ID and its bindings survive being emptied.
+
+--recreate DELETES each base and uploads it again. It is only for changing
+granularity, which changes which Units exist and so cannot preserve links no
+matter how it is done. For every other case a plain re-upload is correct and
+non-destructive.
 
 Downstream variants are NOT touched. After updating a base, promote it:
   cub variant promote <component>-<variant>
@@ -54,33 +65,13 @@ Downstream variants are NOT touched. After updating a base, promote it:
 				if err != nil {
 					return fmt.Errorf("checking Space %s: %w", base, err)
 				}
-				if !has {
-					if dryRun {
-						fmt.Fprintf(out, "    would CREATE from %s\n", ref)
-						created++
-						continue
-					}
-					if _, err := r.cub("variant", "upload",
-						"--component", comp.Name, "--variant", "base",
-						"--granularity", "per-file",
-						"--label", "managed-by=eks-inference",
-						ref); err != nil {
-						return fmt.Errorf("installing %s from %s: %w", comp.Name, ref, err)
-					}
-					fmt.Fprintf(out, "    created from %s\n", ref)
-					created++
-					continue
-				}
 
-				// The Space exists. cub has no "sync this Space from a bundle"
-				// operation yet (confighubai/confighub#4976). Until it does,
-				// the only honest way to take a newer bundle is to delete the
-				// base and upload it again — which is what --recreate does.
-				if recreate {
-					// Refuse while any downstream still points at this base.
-					// Deleting it would break their upstream links, and a
-					// variant whose upstream is gone can never be promoted
-					// again — a worse state than being out of date.
+				// --recreate is for a granularity change and nothing else. It
+				// destroys and rebuilds, which is the honest expression of that
+				// operation: the Unit set itself changes, so links to the old
+				// Units cannot survive by any means. Everything else goes
+				// through the plain re-upload below.
+				if recreate && has {
 					downstreams, err := r.variantsOf(comp.Name)
 					if err != nil {
 						return err
@@ -88,37 +79,63 @@ Downstream variants are NOT touched. After updating a base, promote it:
 					if len(downstreams) > 0 {
 						return fmt.Errorf(
 							"%s still has downstream variant(s): %s\n"+
-								"Deleting the base would orphan them permanently. Remove them first:\n"+
-								"  cub eksinf teardown --delete-config",
+								"Deleting the base would orphan them permanently — rebuilding gives new\n"+
+								"Unit IDs their links cannot follow. Remove them first:\n"+
+								"  cub eksinf teardown --delete-config\n"+
+								"If you only want a newer bundle, drop --recreate: a plain re-upload\n"+
+								"updates in place and keeps the links.",
 							base, strings.Join(downstreams, ", "))
 					}
 					if dryRun {
-						fmt.Fprintf(out, "    would DELETE and re-upload from %s\n", ref)
+						fmt.Fprintf(out, "    would DELETE and rebuild from %s\n", ref)
 						updated++
 						continue
 					}
 					if _, err := r.cub("space", "delete", base, "--recursive"); err != nil {
 						return fmt.Errorf("deleting base Space %s: %w", base, err)
 					}
-					if _, err := r.cub("variant", "upload",
-						"--component", comp.Name, "--variant", "base",
-						"--granularity", "per-file",
-						"--label", "managed-by=eks-inference",
-						ref); err != nil {
-						return fmt.Errorf("re-uploading %s from %s: %w", comp.Name, ref, err)
-					}
-					fmt.Fprintf(out, "    recreated from %s\n", ref)
-					updated++
-					continue
+					has = false
 				}
+
+				// Create and re-upload are the SAME command: cub decides which
+				// it is from the Space's state. There is nothing to branch on
+				// here, and no create-if-absent race to lose.
+				args := []string{"variant", "upload",
+					"--component", comp.Name, "--variant", "base",
+					"--granularity", baseGranularity,
+					"--label", "managed-by=eks-inference"}
 				if dryRun {
-					fmt.Fprintf(out, "    exists; would leave it alone (--recreate to refresh)\n")
-					unchanged++
-					continue
+					args = append(args, "--dry-run")
 				}
-				fmt.Fprintf(out, "    exists — leaving it alone\n")
-				fmt.Fprintf(out, "    to take a newer bundle: cub eksinf install --recreate\n")
-				unchanged++
+				if prune {
+					args = append(args, "--prune")
+				}
+				uploadOut, err := r.cub(append(args, ref)...)
+				if err != nil {
+					return fmt.Errorf("uploading %s from %s: %w", comp.Name, ref, err)
+				}
+
+				summary := uploadSummary(uploadOut)
+				switch {
+				case !has:
+					fmt.Fprintf(out, "    created from %s\n", ref)
+					created++
+				case summary == unchangedSummary:
+					fmt.Fprintln(out, "    already up to date")
+					unchanged++
+				default:
+					if summary == "" {
+						summary = "re-uploaded"
+					}
+					fmt.Fprintf(out, "    %s\n", summary)
+					updated++
+				}
+				// cub records each re-upload in a ChangeSet and prints the
+				// command that rolls it back. That is the most useful line in
+				// its output and the easiest to lose in the noise, so lift it.
+				if revert := revertCommand(uploadOut); revert != "" {
+					fmt.Fprintf(out, "    revert: %s\n", revert)
+				}
 			}
 
 			fmt.Fprintf(out, "\nBases: %d created, %d updated, %d untouched.\n", created, updated, unchanged)
@@ -133,8 +150,10 @@ Downstream variants are NOT touched. After updating a base, promote it:
 
 	c.Flags().StringVar(&registry, "registry", defaultRegistry, "OCI registry holding the component bundles")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "report what would happen, change nothing")
+	c.Flags().BoolVar(&prune, "prune", false,
+		"also empty Units the bundle no longer produces")
 	c.Flags().BoolVar(&recreate, "recreate", false,
-		"delete and re-upload bases that already exist, to take a newer bundle")
+		"delete and rebuild each base; only needed to change granularity")
 	return c
 }
 
@@ -169,4 +188,51 @@ func (r *runner) variantsOf(component string) ([]string, error) {
 	}
 	sort.Strings(found)
 	return found, nil
+}
+
+// baseGranularity is the Unit model for every base Space.
+//
+// per-file makes each file in the bundle one Unit, so file names in configs/
+// are an interface. cub now refuses a re-upload at a different granularity —
+// which is the right answer, since changing it changes which Units exist and
+// therefore breaks every link and target binding pointing at the old ones.
+const baseGranularity = "per-file"
+
+// unchangedSummary is what uploadSummary returns for a bundle that has not moved.
+const unchangedSummary = "already up to date"
+
+// uploadSummary reduces cub's upload output to one line.
+//
+// This parses, so it is written to degrade rather than break: an unrecognised
+// output yields "", the caller falls back to a generic message, and nothing
+// depends on the wording being stable. The alternative — asking ConfigHub what
+// changed — costs an extra round trip per component to phrase a status line.
+func uploadSummary(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "Already up to date"):
+			return unchangedSummary
+		case strings.HasPrefix(line, "Re-uploaded "):
+			// "Re-uploaded <space>: 1 created, 1 updated, 0 emptied"
+			if _, counts, ok := strings.Cut(line, ": "); ok {
+				return counts
+			}
+		}
+	}
+	return ""
+}
+
+// revertCommand extracts the rollback command cub prints for a re-upload.
+//
+// Worth surfacing rather than leaving in the noise: it is the only way back
+// from a bad bundle, and it is scoped to the exact ChangeSet the upload made.
+func revertCommand(out string) string {
+	const prefix = "Revert with: "
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); strings.HasPrefix(line, prefix) {
+			return strings.TrimPrefix(line, prefix)
+		}
+	}
+	return ""
 }
