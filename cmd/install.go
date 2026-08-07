@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -12,7 +14,7 @@ const defaultRegistry = "ghcr.io/confighub/configs/eks-inference"
 
 func newInstallCmd() *cobra.Command {
 	var registry string
-	var dryRun bool
+	var dryRun, recreate bool
 
 	c := &cobra.Command{
 		Use:   "install",
@@ -71,18 +73,51 @@ Downstream variants are NOT touched. After updating a base, promote it:
 				}
 
 				// The Space exists. cub has no "sync this Space from a bundle"
-				// operation yet (confighubai/confighub#4976), so report rather
-				// than pretend: re-uploading would not update it, and blindly
-				// deleting and recreating would break every downstream
-				// variant's upstream link.
+				// operation yet (confighubai/confighub#4976). Until it does,
+				// the only honest way to take a newer bundle is to delete the
+				// base and upload it again — which is what --recreate does.
+				if recreate {
+					// Refuse while any downstream still points at this base.
+					// Deleting it would break their upstream links, and a
+					// variant whose upstream is gone can never be promoted
+					// again — a worse state than being out of date.
+					downstreams, err := r.variantsOf(comp.Name)
+					if err != nil {
+						return err
+					}
+					if len(downstreams) > 0 {
+						return fmt.Errorf(
+							"%s still has downstream variant(s): %s\n"+
+								"Deleting the base would orphan them permanently. Remove them first:\n"+
+								"  cub eksinf teardown --delete-config",
+							base, strings.Join(downstreams, ", "))
+					}
+					if dryRun {
+						fmt.Fprintf(out, "    would DELETE and re-upload from %s\n", ref)
+						updated++
+						continue
+					}
+					if _, err := r.cub("space", "delete", base, "--recursive"); err != nil {
+						return fmt.Errorf("deleting base Space %s: %w", base, err)
+					}
+					if _, err := r.cub("variant", "upload",
+						"--component", comp.Name, "--variant", "base",
+						"--granularity", "per-file",
+						"--label", "managed-by=eks-inference",
+						ref); err != nil {
+						return fmt.Errorf("re-uploading %s from %s: %w", comp.Name, ref, err)
+					}
+					fmt.Fprintf(out, "    recreated from %s\n", ref)
+					updated++
+					continue
+				}
 				if dryRun {
-					fmt.Fprintf(out, "    exists; would check for updates\n")
+					fmt.Fprintf(out, "    exists; would leave it alone (--recreate to refresh)\n")
 					unchanged++
 					continue
 				}
 				fmt.Fprintf(out, "    exists — leaving it alone\n")
-				fmt.Fprintf(out, "    to take a newer bundle: delete the Space and re-run,\n")
-				fmt.Fprintf(out, "    or update Units from a checkout with 'make install'\n")
+				fmt.Fprintf(out, "    to take a newer bundle: cub eksinf install --recreate\n")
 				unchanged++
 			}
 
@@ -98,5 +133,34 @@ Downstream variants are NOT touched. After updating a base, promote it:
 
 	c.Flags().StringVar(&registry, "registry", defaultRegistry, "OCI registry holding the component bundles")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "report what would happen, change nothing")
+	c.Flags().BoolVar(&recreate, "recreate", false,
+		"delete and re-upload bases that already exist, to take a newer bundle")
 	return c
+}
+
+// variantsOf lists the downstream variant Spaces of a component's base.
+//
+// Spaces are named <component>-<variant>, so the base is one of the matches and
+// has to be excluded. This drives a refusal rather than a warning: a variant
+// whose upstream Space has been deleted cannot be promoted again, and that is
+// not recoverable by re-uploading the base — the new Units have new IDs.
+func (r *runner) variantsOf(component string) ([]string, error) {
+	out, err := r.cub("space", "list", "--no-headers")
+	if err != nil {
+		return nil, fmt.Errorf("listing Spaces: %w", err)
+	}
+	base := baseSpace(component)
+	var found []string
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		name := fields[0]
+		if name != base && strings.HasPrefix(name, component+"-") {
+			found = append(found, name)
+		}
+	}
+	sort.Strings(found)
+	return found, nil
 }

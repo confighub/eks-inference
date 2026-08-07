@@ -197,6 +197,21 @@ File names in `configs/` are an interface: bundles install with
 `--granularity per-file`, so each file becomes one Unit and renaming a file
 renames a Unit.
 
+### Taking a newer bundle
+
+`cub variant upload` cannot yet refresh an existing base Space from a newer
+bundle (confighubai/confighub#4976), so republishing the bundles does not move
+an installed base. Until that lands the loop is wipe-and-rebuild:
+
+```bash
+cub eksinf install --recreate
+```
+
+which deletes each base and uploads it again — and refuses while any downstream
+variant still points at it, because re-uploading mints new UnitIDs and an
+orphaned variant can never be promoted again. Full sequence in
+[docs/install.md](./docs/install.md#wiping-and-starting-over).
+
 ### Versioning the plugin
 
 `0.MINOR.PATCH`, and the distinction is not decorative — the number is the only

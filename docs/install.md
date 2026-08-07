@@ -142,3 +142,35 @@ advance as soon as the resources are *created*, not when the underlying AWS
 resources are ready. To make waves actually gate on AWS convergence, add a
 resource customization keyed on `ACK.ResourceSynced`. Without it, ordering
 between waves is advisory.
+
+## Wiping and starting over
+
+Until `cub variant upload` can refresh an existing Space from a newer bundle
+(confighubai/confighub#4976), a base installed today is pinned to today's bundle.
+Republishing the bundle changes nothing about it. So while that feature is
+missing, the way to pick up new config is to wipe and rebuild, and that is the
+normal development loop rather than an exceptional recovery:
+
+```bash
+# 1. AWS, then this stack's variant Spaces (8 components + the profile).
+cub eksinf teardown --yes --delete-config
+
+# 2. The enrolled EKS cluster's wiring. Its Spaces are NOT covered by
+#    teardown, which only knows about component variants.
+cub eksinf enroll remove --name inference-demo --delete-spaces --yes
+
+# 3. The management cluster, its Spaces, and argobot's.
+cub cluster down --name inference-mgmt --delete-config
+
+# 4. Replace the bases with the current bundles.
+cub eksinf install --recreate
+```
+
+Order matters in exactly one place, and `--recreate` enforces it rather than
+trusting you: it refuses to delete a base while any downstream variant still
+points at it. Deleting the base first would orphan those variants permanently —
+re-uploading produces Units with new IDs, so the upstream link cannot be
+restored and `cub variant promote` has nothing to promote. Being out of date is
+recoverable; being orphaned is not.
+
+Step 4 alone is enough when only the bundles changed and nothing is deployed.
