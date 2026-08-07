@@ -140,14 +140,21 @@ Downstream variants are NOT touched. After updating a base, promote it:
 
 // variantsOf lists the downstream variant Spaces of a component's base.
 //
-// Spaces are named <component>-<variant>, so the base is one of the matches and
-// has to be excluded. This drives a refusal rather than a warning: a variant
-// whose upstream Space has been deleted cannot be promoted again, and that is
-// not recoverable by re-uploading the base — the new Units have new IDs.
+// Selected by the Component LABEL, not by name prefix. Component names overlap
+// — "karpenter" is a prefix of "karpenter-aws" — so matching on the name makes
+// karpenter-aws-base look like a downstream variant of karpenter-base, and
+// --recreate then refuses to touch a base that has no downstreams at all. The
+// label is what actually identifies a component; the naming is a convention on
+// top of it.
+//
+// This drives a refusal rather than a warning: a variant whose upstream Space
+// has been deleted cannot be promoted again, and re-uploading the base does not
+// repair it because the new Units have new IDs.
 func (r *runner) variantsOf(component string) ([]string, error) {
-	out, err := r.cub("space", "list", "--no-headers")
+	out, err := r.cub("space", "list", "--no-headers",
+		"--where", fmt.Sprintf("Labels.Component = '%s'", component))
 	if err != nil {
-		return nil, fmt.Errorf("listing Spaces: %w", err)
+		return nil, fmt.Errorf("listing Spaces for component %s: %w", component, err)
 	}
 	base := baseSpace(component)
 	var found []string
@@ -156,8 +163,7 @@ func (r *runner) variantsOf(component string) ([]string, error) {
 		if len(fields) == 0 {
 			continue
 		}
-		name := fields[0]
-		if name != base && strings.HasPrefix(name, component+"-") {
+		if name := fields[0]; name != base {
 			found = append(found, name)
 		}
 	}

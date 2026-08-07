@@ -537,12 +537,29 @@ most dangerous step here.`,
 			fmt.Fprintln(w, "  Argo CD left installed (it may predate enrollment)")
 
 			if deleteSpaces {
+				// --recursive, for the same reason teardown needs it: a Space
+				// holding Releases, Tags, Links, Units or a BridgeWorker refuses
+				// to delete, and discovering that chain one HTTP 400 at a time
+				// is a waste when the CLI already has a flag for it.
+				//
+				// NOT --recursive-force: that ignores delete gates, and a gate
+				// is someone deliberately marking config as protected.
+				failed := false
 				for _, s := range []string{appsSpace, name} {
-					if _, err := r.cub("space", "delete", s); err != nil {
+					if _, err := r.cub("space", "delete", s, "--recursive"); err != nil {
+						failed = true
 						fmt.Fprintf(w, "  could not delete Space %s: %v\n", s, err)
 					} else {
 						fmt.Fprintf(w, "  deleted Space %s\n", s)
 					}
+				}
+				if failed {
+					// Reporting "Unenrolled" while Spaces survive is how a wipe
+					// silently leaves state behind and the next install trips
+					// over it.
+					return fmt.Errorf(
+						"the in-cluster wiring was removed but some Spaces remain (above).\n" +
+							"They must be gone before re-enrolling under the same name")
 				}
 			} else {
 				fmt.Fprintln(w, "  ConfigHub Spaces left in place (pass --delete-spaces to remove)")
