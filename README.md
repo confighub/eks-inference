@@ -18,7 +18,8 @@ cub eksinf --help
 ```
 
 The plugin is the admin tool for this stack. You do not need this repo checked
-out to use it.
+out to use it. Needs **cub v0.2.14 or newer** — `install` re-uploads into an
+existing Space, which older versions cannot do.
 
 ## Quick start
 
@@ -51,8 +52,13 @@ workload plane onto it:
 ```bash
 # 7. Enroll EKS: install Argo CD, register a worker and OCI target, bootstrap
 #    the root app-of-apps. Never creates or destroys a cluster.
+#
+#    --grant-access is needed after step 4's create-user path: ACK built the
+#    cluster as its own identity, so EKS trusts THAT principal and not yours,
+#    and the API server rejects you outright. It adds an access entry for your
+#    identity. Omit it if you already have cluster-admin on the cluster.
 cub eksinf enroll cluster --name inference-demo \
-  --eks-cluster inference-demo --region us-west-2
+  --eks-cluster inference-demo --region us-west-2 --grant-access
 
 # 8. Deploy Karpenter, the GPU runtime, and the workloads.
 cub eksinf deploy --plane workload --target inference-demo/target

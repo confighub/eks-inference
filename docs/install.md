@@ -117,6 +117,19 @@ cub release publish aws-network-dev   # what deploy does per component
 > requeues rather than fails permanently — so the stack reaches the right state
 > regardless. It is just noisy on the way there.
 
+### Enrolling the EKS cluster
+
+`cub eksinf enroll cluster --name … --eks-cluster … --region … --grant-access`
+
+`--grant-access` matters whenever the ACK controllers hold a different AWS
+identity from yours, which is exactly what `creds create-user` arranges. EKS
+grants bootstrap admin to the principal that CREATED the cluster — the ACK user —
+so your own identity has no access entry and the API server rejects you with a
+bare 401 that says nothing about access entries. The flag adds a STANDARD entry
+with `AmazonEKSClusterAdminPolicy` and waits for it to take effect, which is not
+instant. Without it, `enroll` now names the missing principal and prints the two
+`aws` commands rather than failing opaquely.
+
 ## 6. Watch it converge
 
 ```bash
