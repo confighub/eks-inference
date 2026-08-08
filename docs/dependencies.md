@@ -62,6 +62,12 @@ ConfigHub.
 What ConfigHub is for here is the opposite category: values that exist before
 anything is applied, and that must be **identical** in several places.
 
+`vpcCIDR` is the other clean example, and the cheapest to overlook. It appears
+in the VPC's own `cidrBlocks`, and again in the cluster security group's
+intra-VPC ingress rule — one range, two resources, nothing checking that the
+copies agree. Change one and not the other and every node launches, joins the
+cluster, and then cannot reach its peers. No error names the rule.
+
 The clearest example is `karpenter.sh/discovery`. It appears in:
 
 - `src/aws-network/network.yaml` — the three private subnets and the cluster
@@ -98,12 +104,26 @@ link — see below.
 A `platform-profile` Space holding a single Unit, never applied to any cluster:
 
 ```yaml
-accountID: "…"
 region: us-west-2
 availabilityZones: [us-west-2a, us-west-2b, us-west-2c]
 clusterName: inference-demo
+networkName: inference-demo-net
 vpcCIDR: 10.42.0.0/16
+publicSubnetCIDRs:  [10.42.0.0/20,  10.42.16.0/20, 10.42.32.0/20]
+privateSubnetCIDRs: [10.42.64.0/20, 10.42.80.0/20, 10.42.96.0/20]
+nodeRoleName: inference-demo-node-role
+gpuAMIAlias: al2023@v20260724
 ```
+
+The three list-valued fields are indexed **positionally against each other**:
+entry 0 of `availabilityZones`, `publicSubnetCIDRs` and `privateSubnetCIDRs` all
+describe the same zone. Nothing enforces that, so keep them the same length and
+the same order.
+
+The subnet CIDRs are written out rather than derived from `vpcCIDR`, because a
+link copies or templates a value — it cannot do CIDR arithmetic. That is also the
+better answer: how much room a /16 leaves after six /20s is a decision worth
+reviewing, not a formula to rediscover.
 
 Every component links from it. Two different things are easy to conflate here:
 
