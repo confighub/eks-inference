@@ -15,6 +15,5 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: confighub
     eks-inference.confighub.com/component: gpu-runtime
-    eks-inference.confighub.com/reupload-probe: "4991"
   annotations:
     argocd.argoproj.io/sync-wave: "-30"
