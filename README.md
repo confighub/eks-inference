@@ -37,12 +37,18 @@ cub variant create dev platform-profile-base
 #    the Secret is never a ConfigHub Unit. Do this BEFORE deploying: the
 #    controllers read credentials once at startup, and a bad identity fails
 #    here in a second rather than as a condition on a VPC later.
+#
+#    Add --profile NAME unless your default AWS identity is the right one.
+#    Add --cluster inference-mgmt if you have other cub-managed clusters:
+#    creds normally finds the management cluster by its ack-system namespace,
+#    which does not exist yet, and it asks rather than guessing between them.
 cub eksinf creds create-user --yes        # or: creds use-existing
 
 # 5. Deploy the management plane. This creates AWS infrastructure.
 cub eksinf deploy --plane mgmt --target inference-mgmt/target
 
-# 6. Watch it converge. ~5 min for the network, ~15 for the EKS control plane.
+# 6. Watch it converge. Measured: ~5 min for the network, ~10 for the EKS
+#    control plane, ~3 more for the system nodegroup.
 cub eksinf status
 ```
 
@@ -86,6 +92,31 @@ Karpenter launches a `g6.xlarge` in about 90 seconds. Scale back to `0` and it i
 released. **Do not use `kubectl scale`** — the Argo Application syncs with
 `selfHeal: true`, so a manual scale is reverted within a minute, having reported
 success.
+
+## Taking it down
+
+The stack bills ~$130/month idle, so this is part of the walkthrough rather than
+an appendix:
+
+```bash
+# Destroys the AWS resources, in the only safe order: workload plane, then mgmt.
+# Roughly 20-35 minutes, most of it waiting for EKS and the NAT gateway.
+cub eksinf teardown --yes --profile <aws-profile>
+
+# The two local pieces teardown deliberately leaves to you.
+cub eksinf creds delete-user --yes        # the IAM user, if you created one
+cub cluster down --name inference-mgmt    # the kind cluster
+```
+
+`teardown` goes THROUGH config rather than around it — deleting Kubernetes
+objects does not work here, because Argo restores them and the ACK controllers
+run with `deletionPolicy: retain`, so even a delete that survives leaves the AWS
+resource running. It verifies against EC2 at the end rather than trusting the
+Kubernetes view.
+
+Add `--delete-config` to remove the ConfigHub Spaces too; without it the config
+survives and `cub eksinf deploy` can rebuild onto a fresh cluster. See
+[docs/teardown.md](./docs/teardown.md).
 
 ## The two apply planes
 
