@@ -13,6 +13,8 @@ kind: Namespace
 metadata:
   name: gpu-operator
   labels:
+    eks-inference.confighub.com/reupload-probe: "4991"
+  labels:
     app.kubernetes.io/managed-by: confighub
     eks-inference.confighub.com/component: gpu-runtime
   annotations:
