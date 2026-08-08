@@ -36,7 +36,28 @@ spec:
     - us-west-2b
     - us-west-2c
 
+  # The address plan. vpcCIDR is the whole VPC; the two subnet lists are indexed
+  # BY THE SAME POSITION as availabilityZones above, so entry 0 of each is the
+  # "a" zone. Keep the three lists the same length and the same order.
+  #
+  # These are split out rather than derived because ConfigHub cannot do CIDR
+  # arithmetic — a link copies or templates a value, it does not subnet a range.
+  # Writing them out is also what makes the plan reviewable: a /16 carved into
+  # six /20s leaves room, and how much room is a decision, not a formula.
+  #
+  # vpcCIDR is read in TWO places: the VPC itself and the cluster security
+  # group's intra-VPC ingress rule. That duplication is exactly what this
+  # profile exists to remove — change the CIDR and forget the rule, and
+  # node-to-node traffic breaks with no error pointing at the cause.
   vpcCIDR: 10.42.0.0/16
+  publicSubnetCIDRs:
+    - 10.42.0.0/20
+    - 10.42.16.0/20
+    - 10.42.32.0/20
+  privateSubnetCIDRs:
+    - 10.42.64.0/20
+    - 10.42.80.0/20
+    - 10.42.96.0/20
 
   # The node role Karpenter puts on the instances it launches. Created by
   # eks-cluster, consumed by karpenter's EC2NodeClass in the other plane.

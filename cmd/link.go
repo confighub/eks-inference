@@ -87,9 +87,40 @@ var profileBindings = []binding{
 		"spec.availabilityZone", "spec.availabilityZones.1"},
 	{"aws-network", "network", "az2", subnetType, "aws-inference/inference-demo-public-c",
 		"spec.availabilityZone", "spec.availabilityZones.2"},
+
+	// The address plan. Same positional convention as the zones: entry 0 of each
+	// subnet list is the "a" zone.
+	//
+	// vpcCIDR lands in TWO resources. The security group's intra-VPC ingress
+	// rule repeats the VPC's own range, and nothing checks that the copies
+	// agree — set the CIDR in one place and not the other and every node comes
+	// up, joins, and then cannot talk to its peers, with no error naming the
+	// rule. That is the same shape as karpenter.sh/discovery and the reason
+	// this profile exists.
+	{"aws-network", "network", "vpcCIDR", vpcType, "aws-inference/inference-demo-vpc",
+		"spec.cidrBlocks.0", ""},
+	{"aws-network", "network", "vpcCIDR", sgType, "aws-inference/inference-demo-cluster-sg",
+		"spec.ingressRules.0.ipRanges.0.cidrIP", ""},
+
+	{"aws-network", "network", "pubCIDR0", subnetType, "aws-inference/inference-demo-public-a",
+		"spec.cidrBlock", "spec.publicSubnetCIDRs.0"},
+	{"aws-network", "network", "pubCIDR1", subnetType, "aws-inference/inference-demo-public-b",
+		"spec.cidrBlock", "spec.publicSubnetCIDRs.1"},
+	{"aws-network", "network", "pubCIDR2", subnetType, "aws-inference/inference-demo-public-c",
+		"spec.cidrBlock", "spec.publicSubnetCIDRs.2"},
+	{"aws-network", "network", "privCIDR0", subnetType, "aws-inference/inference-demo-private-a",
+		"spec.cidrBlock", "spec.privateSubnetCIDRs.0"},
+	{"aws-network", "network", "privCIDR1", subnetType, "aws-inference/inference-demo-private-b",
+		"spec.cidrBlock", "spec.privateSubnetCIDRs.1"},
+	{"aws-network", "network", "privCIDR2", subnetType, "aws-inference/inference-demo-private-c",
+		"spec.cidrBlock", "spec.privateSubnetCIDRs.2"},
 }
 
-const subnetType = "ec2.services.k8s.aws/v1alpha1/Subnet"
+const (
+	subnetType = "ec2.services.k8s.aws/v1alpha1/Subnet"
+	vpcType    = "ec2.services.k8s.aws/v1alpha1/VPC"
+	sgType     = "ec2.services.k8s.aws/v1alpha1/SecurityGroup"
+)
 
 const (
 	profileComponent = "platform-profile"
