@@ -11,6 +11,19 @@ import (
 
 const ackDeletionPolicyAnnotation = "services.k8s.aws/deletion-policy"
 
+// stackTagFilter selects the resources aws-network tags as belonging to this
+// stack. Both the "is anything left" check and the orphan sweeps scope on it.
+const stackTagFilter = "Name=tag:eks-inference.confighub.com/stack,Values=inference-demo"
+
+// eksClusterSGPrefix is how EKS names the security group it creates per cluster.
+const eksClusterSGPrefix = "eks-cluster-sg-inference-demo"
+
+// stallSweepEvery is how many consecutive no-progress polls (30s each) pass
+// before sweeping for orphans, and between repeat sweeps. Six is three minutes:
+// long enough not to fire on ACK's ordinary backoff, short enough to leave most
+// of the 35-minute budget for the delete to finish afterwards.
+const stallSweepEvery = 6
+
 // Every ACK kind this stack creates. The annotation wait and the delete MUST
 // use the same list: a kind checked but not deleted leaks, and a kind deleted
 // but not checked is deleted while possibly still set to retain.
@@ -274,6 +287,7 @@ func (r *runner) teardownMgmt(region string, w io.Writer) error {
 
 	fmt.Fprintln(w, "  waiting for AWS to converge (this takes ~20 minutes)")
 	deadline := time.Now().Add(35 * time.Minute)
+	prev, stalled := -1, 0
 	for {
 		out, err := r.kubectl(kc, "get", ackKinds, "-n", "aws-inference", "-o", "name")
 		if err != nil {
@@ -288,6 +302,24 @@ func (r *runner) teardownMgmt(region string, w io.Writer) error {
 			return fmt.Errorf("%d ACK resource(s) still present after 35m.\n"+
 				"Check for a terminal condition:  kubectl get %s -n aws-inference", n, ackKinds)
 		}
+
+		// Progress is the signal. ACK converges noisily but it does converge, so
+		// a count that stops moving means something is blocking a delete that
+		// ACK cannot clear on its own — always a DependencyViolation, always
+		// something no Unit describes. Sweep for those, rather than sitting out
+		// the full 35 minutes waiting for a retry that cannot succeed.
+		if n == prev {
+			stalled++
+		} else {
+			prev, stalled = n, 0
+		}
+		if stalled > 0 && stalled%stallSweepEvery == 0 {
+			fmt.Fprintf(w, "    no progress for %s; sweeping for orphans that block deletion\n",
+				time.Duration(stalled)*30*time.Second)
+			r.releaseOrphanedENIs(region, w)
+			r.releaseClusterSecurityGroups(region, w)
+		}
+
 		fmt.Fprintf(w, "    %d remaining…\n", n)
 		time.Sleep(30 * time.Second)
 	}
@@ -398,7 +430,7 @@ func (r *runner) verifyNothingLeft(region string, w io.Writer) error {
 	}{
 		{"EKS clusters", []string{"eks", "list-clusters", "--query", "clusters", "--output", "text"}},
 		{"stack VPCs", []string{"ec2", "describe-vpcs",
-			"--filters", "Name=tag:eks-inference.confighub.com/stack,Values=inference-demo",
+			"--filters", stackTagFilter,
 			"--query", "Vpcs[].VpcId", "--output", "text"}},
 		{"NAT gateways", []string{"ec2", "describe-nat-gateways",
 			"--filter", "Name=state,Values=available,pending",
@@ -506,6 +538,125 @@ func (r *runner) waitForArgoStopped(kc string, wait time.Duration, w io.Writer) 
 		}
 		time.Sleep(10 * time.Second)
 	}
+}
+
+// stackVPC returns this stack's VPC id, or "" if it is gone or unreadable.
+// Every orphan sweep scopes itself to this: nothing outside the VPC aws-network
+// created is ours to delete.
+func (r *runner) stackVPC(region string) string {
+	out, err := r.aws("ec2", "describe-vpcs", "--region", region,
+		"--filters", stackTagFilter,
+		"--query", "Vpcs[].VpcId", "--output", "text")
+	if err != nil {
+		return ""
+	}
+	if ids := strings.Fields(strings.TrimSpace(out)); len(ids) > 0 {
+		return ids[0]
+	}
+	return ""
+}
+
+// releaseOrphanedENIs deletes detached network interfaces left in the stack VPC.
+//
+// The VPC CNI gives each node secondary ENIs for pod IPs. When a node goes away
+// abruptly — which is how Karpenter reclaims a consolidated node — one can be
+// left behind in "available": attached to nothing, running nothing, billing
+// nothing, and therefore invisible to every check this command makes. It still
+// holds its subnet and its security group, which hold the route table, which
+// holds the VPC. One leaked ENI stalls the entire delete on DependencyViolation.
+//
+// Measured: a single ENI from a released g6.xlarge blocked four resources for the
+// full 35-minute deadline, and teardown then failed with all four "still
+// present" and no indication of why.
+//
+// Only "available" interfaces are touched. An in-use one belongs to something
+// still running and is not ours to delete.
+//
+// This deliberately does NOT run at drain time, where it would be the obvious
+// place. Two reasons: the ENI is often still detaching when the instance
+// disappears, so a sweep there misses it; and the system nodegroup is still live
+// then, so deleting interfaces out from under a running CNI risks breaking a
+// cluster that has not been destroyed yet. Stalled convergence is the honest
+// signal — by then the control plane is going or gone and an available ENI in
+// this VPC is unambiguously garbage.
+func (r *runner) releaseOrphanedENIs(region string, w io.Writer) {
+	vpc := r.stackVPC(region)
+	if vpc == "" {
+		return
+	}
+	out, err := r.aws("ec2", "describe-network-interfaces", "--region", region,
+		"--filters", "Name=vpc-id,Values="+vpc, "Name=status,Values=available",
+		"--query", "NetworkInterfaces[].NetworkInterfaceId", "--output", "text")
+	if err != nil {
+		fmt.Fprintf(w, "      could not list network interfaces (%v); the VPC may hang on DependencyViolation\n", err)
+		return
+	}
+	for _, eni := range strings.Fields(out) {
+		if _, err := r.aws("ec2", "delete-network-interface", "--region", region,
+			"--network-interface-id", eni); err != nil {
+			fmt.Fprintf(w, "      could not delete orphaned ENI %s: %v\n", eni, err)
+			continue
+		}
+		fmt.Fprintf(w, "      released orphaned ENI %s\n", eni)
+	}
+}
+
+// releaseClusterSecurityGroups deletes the security group EKS creates for the
+// cluster.
+//
+// EKS creates this one, not ACK, so no Unit describes it and nothing in the
+// config owns it. EKS deletes it along with the cluster — unless something still
+// references it, which a leaked ENI does. Once the control plane is gone nothing
+// will ever retry, and a VPC cannot be deleted while a non-default security group
+// remains inside it. The result is a VPC that is permanently undeletable by any
+// path this command has.
+//
+// Matched by EKS's own naming (eks-cluster-sg-<cluster>-<id>) rather than by
+// "everything that is not default", so a security group someone added by hand is
+// left alone. The default group is never touched: AWS deletes it with the VPC and
+// refuses to delete it on its own.
+func (r *runner) releaseClusterSecurityGroups(region string, w io.Writer) {
+	vpc := r.stackVPC(region)
+	if vpc == "" {
+		return
+	}
+	out, err := r.aws("ec2", "describe-security-groups", "--region", region,
+		"--filters", "Name=vpc-id,Values="+vpc,
+		"--query", "SecurityGroups[].[GroupId,GroupName]", "--output", "text")
+	if err != nil {
+		fmt.Fprintf(w, "      could not list security groups (%v); the VPC may hang on DependencyViolation\n", err)
+		return
+	}
+	for _, sg := range eksClusterSGs(out) {
+		if _, err := r.aws("ec2", "delete-security-group", "--region", region, "--group-id", sg.id); err != nil {
+			// Expected while an ENI still references it; the next sweep retries
+			// after releaseOrphanedENIs has had a turn.
+			fmt.Fprintf(w, "      could not delete %s (%s) yet: %v\n", sg.name, sg.id, err)
+			continue
+		}
+		fmt.Fprintf(w, "      released EKS cluster security group %s\n", sg.name)
+	}
+}
+
+type securityGroup struct{ id, name string }
+
+// eksClusterSGs picks the EKS-created cluster security groups out of the text
+// output of `describe-security-groups`, one "<GroupId>\t<GroupName>" per line.
+//
+// Split out to be testable: this is text-shaped AWS output being matched by
+// prefix, which is exactly the kind of parsing that fails silently and reports
+// "nothing to do" for a group that is sitting right there — the same trap
+// extractJSONString fell into.
+func eksClusterSGs(awsOutput string) []securityGroup {
+	var found []securityGroup
+	for _, line := range strings.Split(strings.TrimSpace(awsOutput), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 || !strings.HasPrefix(f[1], eksClusterSGPrefix) {
+			continue
+		}
+		found = append(found, securityGroup{id: f[0], name: f[1]})
+	}
+	return found
 }
 
 // releaseKarpenterInstanceProfiles detaches and deletes the instance profiles
