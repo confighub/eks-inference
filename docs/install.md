@@ -224,8 +224,10 @@ empty — abandoning a stack rather than updating one:
 # 1. AWS, then this stack's variant Spaces (8 components + the profile).
 cub eksinf teardown --yes --delete-config
 
-# 2. The enrolled EKS cluster's wiring. Its Spaces are NOT covered by
-#    teardown, which only knows about component variants.
+# 2. The enrolled EKS cluster's wiring, including its argobot Space. None of
+#    these are covered by teardown, which only knows about component variants.
+#    argobot's Space goes first: its release target points at the cluster's
+#    target, and that reference blocks deleting the cluster Space.
 cub eksinf enroll remove --name inference-demo --delete-spaces --yes
 
 # 3. The management cluster, its Spaces, and argobot's.

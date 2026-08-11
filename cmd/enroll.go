@@ -51,6 +51,7 @@ type enrollOpts struct {
 
 	noPlaceholderGate bool
 	grantAccess       bool
+	noArgobot         bool
 }
 
 func newEnrollRunCmd() *cobra.Command {
@@ -98,6 +99,12 @@ func newEnrollRunCmd() *cobra.Command {
 			if err := r.ensureRootApp(kc, &o, registry, w); err != nil {
 				return err
 			}
+			// After the root app: argobot's own child Application is created by
+			// `variant create --target`, and publishing the apps Space is part of
+			// that, so the root app must already exist to adopt it.
+			if err := r.installArgobot(kc, &o, w); err != nil {
+				return err
+			}
 
 			appsSpace := o.name + "-argo-apps"
 			fmt.Fprintf(w, "\nEnrolled %q.\n\n", o.name)
@@ -122,6 +129,8 @@ func newEnrollRunCmd() *cobra.Command {
 		"grant your AWS identity cluster-admin on the EKS cluster if it has no access entry")
 	c.Flags().BoolVar(&o.noPlaceholderGate, "no-placeholder-gate", false,
 		"skip the default vet-placeholders Trigger, allowing Releases with unfilled placeholders")
+	c.Flags().BoolVar(&o.noArgobot, "no-argobot", false,
+		"do not install argobot; the workload plane then syncs on Argo's reconcile interval")
 	return c
 }
 
@@ -545,6 +554,13 @@ most dangerous step here.`,
 				// NOT --recursive-force: that ignores delete gates, and a gate
 				// is someone deliberately marking config as protected.
 				failed := false
+				// argobot's Space first: its release target points at
+				// <name>/target, and that inbound reference makes the cluster
+				// Space undeletable until it is gone.
+				if err := r.removeArgobotSpace(name, w); err != nil {
+					failed = true
+					fmt.Fprintf(w, "  could not delete the argobot Space: %v\n", err)
+				}
 				for _, s := range []string{appsSpace, name} {
 					if _, err := r.cub("space", "delete", s, "--recursive"); err != nil {
 						failed = true
