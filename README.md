@@ -57,7 +57,14 @@ workload plane onto it:
 
 ```bash
 # 7. Enroll EKS: install Argo CD, register a worker and OCI target, bootstrap
-#    the root app-of-apps. Never creates or destroys a cluster.
+#    the root app-of-apps, and install argobot. Never creates or destroys a
+#    cluster.
+#
+#    argobot force-syncs the matching Argo Application the moment a deploy
+#    happens, so step 8 and every later release land in seconds rather than
+#    waiting out Argo's reconcile interval. `cub cluster up` installs it for the
+#    mgmt cluster; without it here the two planes would behave differently under
+#    the same command. Pass --no-argobot to skip it.
 #
 #    --grant-access is needed after step 4's create-user path: ACK built the
 #    cluster as its own identity, so EKS trusts THAT principal and not yours,
