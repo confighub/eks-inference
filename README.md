@@ -21,14 +21,25 @@ The plugin is the admin tool for this stack. You do not need this repo checked
 out to use it. Needs **cub v0.2.14 or newer** — `install` re-uploads into an
 existing Space, which older versions cannot do.
 
-## Just the configuration, for free
-
-If you want to see how the stack is put together without provisioning anything,
-skip the quick start:
+## First, the component bases
 
 ```bash
-cub eksinf install         # the eight component bases
-cub eksinf sandbox up      # variants, links, gate, releases — no infrastructure
+cub eksinf install
+```
+
+This pulls the eight component bundles from their OCI registry and creates a
+`<component>-base` Space for each. It needs nothing but `cub` and a ConfigHub
+login — no cluster, no Docker, no AWS account, no cost — and it is **once per
+ConfigHub organization**, not once per stack. Bases are the shared upstream that
+every variant clones from, so a sandbox and a real deployment use the same ones.
+
+Everything below starts from here. The two paths are independent: do either
+first, or both, in any order.
+
+## Path A: just the configuration, for free
+
+```bash
+cub eksinf sandbox up
 ```
 
 About thirty seconds, no AWS account, no Docker, nothing to bill. You get the
@@ -39,21 +50,24 @@ registry. What is missing is a consumer — no Argo CD pulls those releases and 
 ACK controller acts on them.
 
 It uses variant `sandbox` rather than `dev`, so it can sit alongside a real stack
-in the same organization. `cub eksinf sandbox down --yes` removes it.
+in the same organization; you can leave it running and build the real thing later
+without undoing anything. `cub eksinf sandbox down --yes` removes it.
 
-## Quick start
+## Path B: the real stack
+
+This is where clusters and cloud resources appear. Note that `cub cluster up` is
+needed before `deploy` — it is what produces the Target to deploy against — and
+not before `install`, so arriving here from Path A costs you nothing.
 
 ```bash
 # 1. A local management cluster, wired to ConfigHub via Argo CD.
 cub cluster up --name inference-mgmt
 
-# 2. Install the component bases from their published OCI bundles.
-cub eksinf install
-
-# 3. The parameter surface. Its Space has no Target and is never deployed.
+# 2. The parameter surface. Its Space has no Target and is never deployed.
+#    Skip if you already have platform-profile-dev.
 cub variant create dev platform-profile-base
 
-# 4. Give the ACK controllers AWS credentials. The one out-of-band step —
+# 3. Give the ACK controllers AWS credentials. The one out-of-band step —
 #    the Secret is never a ConfigHub Unit. Do this BEFORE deploying: the
 #    controllers read credentials once at startup, and a bad identity fails
 #    here in a second rather than as a condition on a VPC later.
@@ -64,10 +78,10 @@ cub variant create dev platform-profile-base
 #    which does not exist yet, and it asks rather than guessing between them.
 cub eksinf creds create-user --yes        # or: creds use-existing
 
-# 5. Deploy the management plane. This creates AWS infrastructure.
+# 4. Deploy the management plane. This creates AWS infrastructure.
 cub eksinf deploy --plane mgmt --target inference-mgmt/target
 
-# 6. Watch it converge. Measured: ~5 min for the network, ~10 for the EKS
+# 5. Watch it converge. Measured: ~5 min for the network, ~10 for the EKS
 #    control plane, ~3 more for the system nodegroup.
 cub eksinf status
 ```
@@ -76,24 +90,24 @@ When the EKS cluster is `ACTIVE`, bring it under management and deploy the
 workload plane onto it:
 
 ```bash
-# 7. Enroll EKS: install Argo CD, register a worker and OCI target, bootstrap
+# 6. Enroll EKS: install Argo CD, register a worker and OCI target, bootstrap
 #    the root app-of-apps, and install argobot. Never creates or destroys a
 #    cluster.
 #
 #    argobot force-syncs the matching Argo Application the moment a deploy
-#    happens, so step 8 and every later release land in seconds rather than
+#    happens, so step 7 and every later release land in seconds rather than
 #    waiting out Argo's reconcile interval. `cub cluster up` installs it for the
 #    mgmt cluster; without it here the two planes would behave differently under
 #    the same command. Pass --no-argobot to skip it.
 #
-#    --grant-access is needed after step 4's create-user path: ACK built the
+#    --grant-access is needed after step 3's create-user path: ACK built the
 #    cluster as its own identity, so EKS trusts THAT principal and not yours,
 #    and the API server rejects you outright. It adds an access entry for your
 #    identity. Omit it if you already have cluster-admin on the cluster.
 cub eksinf enroll cluster --name inference-demo \
   --eks-cluster inference-demo --region us-west-2 --grant-access
 
-# 8. Deploy Karpenter, the GPU runtime, and the workloads.
+# 7. Deploy Karpenter, the GPU runtime, and the workloads.
 cub eksinf deploy --plane workload --target inference-demo/target
 ```
 
@@ -122,8 +136,11 @@ success.
 
 ## Taking it down
 
-The stack bills ~$130/month idle, so this is part of the walkthrough rather than
-an appendix:
+Path A needs none of this — it created no infrastructure. `cub eksinf sandbox
+down --yes` and you are done.
+
+Path B bills ~$130/month idle, so taking it down is part of the walkthrough
+rather than an appendix:
 
 ```bash
 # Destroys the AWS resources, in the only safe order: workload plane, then mgmt.

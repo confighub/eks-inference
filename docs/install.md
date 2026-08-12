@@ -1,5 +1,11 @@
 # Installing the components into ConfigHub
 
+The order below is how the pieces stack up conceptually, not a dependency chain.
+Only steps 3 onward need a cluster: `cub eksinf install` (step 2) touches nothing
+but ConfigHub, so it can be run first, on its own, with no Docker and no AWS
+account. `cub eksinf sandbox up` goes further and builds every variant, link and
+release without a cluster at all — see the README.
+
 ## 1. A management cluster
 
 ```bash
