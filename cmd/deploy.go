@@ -96,92 +96,20 @@ ships at replicas: 0, so a deploy costs nothing until you ask for capacity.`,
 				}
 			}
 
-			list := ComponentsInPlane(plane)
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "plane %q -> target %s, variant %q\n", plane, target, flagVariant)
-			for _, comp := range list {
-				fmt.Fprintf(out, "  %s\n", comp.Name)
-			}
-			fmt.Fprintln(out)
-
 			if dryRun {
+				list := ComponentsInPlane(plane)
+				fmt.Fprintf(out, "plane %q -> target %s, variant %q\n", plane, target, flagVariant)
+				for _, comp := range list {
+					fmt.Fprintf(out, "  %s\n", comp.Name)
+				}
+				fmt.Fprintln(out)
 				fmt.Fprintln(out, "(dry run; nothing changed)")
 				return nil
 			}
-
-			// Three phases, and the order is forced. Publishing is gated on the
-			// config containing no confighubplaceholder values, and the links
-			// from platform-profile are what fill them — so every variant must
-			// exist and be linked BEFORE anything is published. Creating and
-			// publishing one component at a time cannot work: the first publish
-			// happens while the rest are still placeholders.
-			deployed := map[string]bool{}
-			for _, comp := range list {
-				base := baseSpace(comp.Name)
-				down := variantSpace(comp.Name, flagVariant)
-				fmt.Fprintf(out, "==> %s\n", comp.Name)
-
-				hasBase, err := r.spaceExists(base)
-				if err != nil {
-					return fmt.Errorf("checking base Space %s: %w", base, err)
-				}
-				if !hasBase {
-					fmt.Fprintf(out, "    SKIP: no base Space %q — run 'cub eksinf install' first\n", base)
-					continue
-				}
-
-				hasDown, err := r.spaceExists(down)
-				if err != nil {
-					return fmt.Errorf("checking variant Space %s: %w", down, err)
-				}
-				if hasDown {
-					fmt.Fprintf(out, "    variant %s already exists\n", down)
-				} else {
-					// --target also creates the Argo CD Application for a
-					// cub-cluster target and republishes the apps Space, so
-					// there is no separate wiring step.
-					if _, err := r.cub("variant", "create", flagVariant, base, "--target", target); err != nil {
-						return fmt.Errorf("creating variant %s: %w", down, err)
-					}
-					fmt.Fprintf(out, "    created variant %s\n", down)
-				}
-				deployed[comp.Name] = true
-			}
-
-			profileSpace := variantSpace(profileComponent, flagVariant)
-			hasProfile, err := r.spaceExists(profileSpace)
-			if err != nil {
-				return fmt.Errorf("checking Space %s: %w", profileSpace, err)
-			}
-			if !hasProfile {
-				return fmt.Errorf(
-					"no Space %q, so the placeholders in this plane have nothing to fill them.\n"+
-						"Publishing would be refused by the vet-placeholders gate. Create it with:\n"+
-						"  cub variant create %s %s-base",
-					profileSpace, flagVariant, profileComponent)
-			}
-			fmt.Fprintf(out, "\n==> linking to %s\n", profileSpace)
-			if err := r.linkProfile(out, profileSpace, deployed); err != nil {
+			if err := r.deployPlane(out, plane, target); err != nil {
 				return err
 			}
-
-			fmt.Fprintln(out, "==> publishing")
-			for _, comp := range list {
-				if !deployed[comp.Name] {
-					continue
-				}
-				down := variantSpace(comp.Name, flagVariant)
-				changed, err := r.publishRelease(down)
-				if err != nil {
-					return fmt.Errorf("publishing release for %s: %w", down, err)
-				}
-				if changed {
-					fmt.Fprintf(out, "  %s: published release\n", comp.Name)
-				} else {
-					fmt.Fprintf(out, "  %s: release already current\n", comp.Name)
-				}
-			}
-
 			fmt.Fprintf(out, "\nDeployed plane %q. Argo pulls on its next reconcile.\n", plane)
 			fmt.Fprintln(out, "Check with: cub eksinf status")
 			return nil
@@ -195,4 +123,95 @@ ships at replicas: 0, so a deploy costs nothing until you ask for capacity.`,
 		"deploy the mgmt plane without AWS credentials in the cluster")
 	_ = c.MarkFlagRequired("plane")
 	return c
+}
+
+// deployPlane creates a downstream variant of each component in the plane, links
+// them to the platform-profile, and publishes their releases.
+//
+// Split out of the command so `sandbox` can reuse it verbatim. It touches no
+// cluster and no cloud API: everything here is ConfigHub. That is what makes a
+// config-only mode possible at all — the only thing `deploy` needs from the
+// outside world is a Target to bind the variants to, and a Target is itself just
+// a ConfigHub entity.
+func (r *runner) deployPlane(out io.Writer, plane Plane, target string) error {
+	list := ComponentsInPlane(plane)
+	fmt.Fprintf(out, "plane %q -> target %s, variant %q\n", plane, target, flagVariant)
+	for _, comp := range list {
+		fmt.Fprintf(out, "  %s\n", comp.Name)
+	}
+	fmt.Fprintln(out)
+
+	// Three phases, and the order is forced. Publishing is gated on the
+	// config containing no confighubplaceholder values, and the links
+	// from platform-profile are what fill them — so every variant must
+	// exist and be linked BEFORE anything is published. Creating and
+	// publishing one component at a time cannot work: the first publish
+	// happens while the rest are still placeholders.
+	deployed := map[string]bool{}
+	for _, comp := range list {
+		base := baseSpace(comp.Name)
+		down := variantSpace(comp.Name, flagVariant)
+		fmt.Fprintf(out, "==> %s\n", comp.Name)
+
+		hasBase, err := r.spaceExists(base)
+		if err != nil {
+			return fmt.Errorf("checking base Space %s: %w", base, err)
+		}
+		if !hasBase {
+			fmt.Fprintf(out, "    SKIP: no base Space %q — run 'cub eksinf install' first\n", base)
+			continue
+		}
+
+		hasDown, err := r.spaceExists(down)
+		if err != nil {
+			return fmt.Errorf("checking variant Space %s: %w", down, err)
+		}
+		if hasDown {
+			fmt.Fprintf(out, "    variant %s already exists\n", down)
+		} else {
+			// --target also creates the Argo CD Application for a
+			// cub-cluster target and republishes the apps Space, so
+			// there is no separate wiring step.
+			if _, err := r.cub("variant", "create", flagVariant, base, "--target", target); err != nil {
+				return fmt.Errorf("creating variant %s: %w", down, err)
+			}
+			fmt.Fprintf(out, "    created variant %s\n", down)
+		}
+		deployed[comp.Name] = true
+	}
+
+	profileSpace := variantSpace(profileComponent, flagVariant)
+	hasProfile, err := r.spaceExists(profileSpace)
+	if err != nil {
+		return fmt.Errorf("checking Space %s: %w", profileSpace, err)
+	}
+	if !hasProfile {
+		return fmt.Errorf(
+			"no Space %q, so the placeholders in this plane have nothing to fill them.\n"+
+				"Publishing would be refused by the vet-placeholders gate. Create it with:\n"+
+				"  cub variant create %s %s-base",
+			profileSpace, flagVariant, profileComponent)
+	}
+	fmt.Fprintf(out, "\n==> linking to %s\n", profileSpace)
+	if err := r.linkProfile(out, profileSpace, deployed); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(out, "==> publishing")
+	for _, comp := range list {
+		if !deployed[comp.Name] {
+			continue
+		}
+		down := variantSpace(comp.Name, flagVariant)
+		changed, err := r.publishRelease(down)
+		if err != nil {
+			return fmt.Errorf("publishing release for %s: %w", down, err)
+		}
+		if changed {
+			fmt.Fprintf(out, "  %s: published release\n", comp.Name)
+		} else {
+			fmt.Fprintf(out, "  %s: release already current\n", comp.Name)
+		}
+	}
+	return nil
 }

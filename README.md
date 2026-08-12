@@ -21,6 +21,26 @@ The plugin is the admin tool for this stack. You do not need this repo checked
 out to use it. Needs **cub v0.2.14 or newer** — `install` re-uploads into an
 existing Space, which older versions cannot do.
 
+## Just the configuration, for free
+
+If you want to see how the stack is put together without provisioning anything,
+skip the quick start:
+
+```bash
+cub eksinf install         # the eight component bases
+cub eksinf sandbox up      # variants, links, gate, releases — no infrastructure
+```
+
+About thirty seconds, no AWS account, no Docker, nothing to bill. You get the
+real configuration tree: the downstream variants for both planes, the
+`platform-profile` links that carry shared values across them, the
+vet-placeholders gate, and a published release per variant in ConfigHub's OCI
+registry. What is missing is a consumer — no Argo CD pulls those releases and no
+ACK controller acts on them.
+
+It uses variant `sandbox` rather than `dev`, so it can sit alongside a real stack
+in the same organization. `cub eksinf sandbox down --yes` removes it.
+
 ## Quick start
 
 ```bash
