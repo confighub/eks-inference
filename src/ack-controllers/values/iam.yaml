@@ -1,6 +1,7 @@
 # ACK IAM controller — provisions the EKS cluster and node roles.
 #
-# See ec2.yaml for why deletionPolicy is retain.
+# See ec2.yaml for why deletionPolicy is delete, and why prune and deletionPolicy
+# have to agree.
 aws:
   # PLACEHOLDER, deliberately. The region is not knowable at render time — it
   # belongs to the environment, not to the chart — so it renders as the ConfigHub
@@ -17,7 +18,7 @@ aws:
     secretKey: credentials
     profile: default
 
-deletionPolicy: retain
+deletionPolicy: delete
 installScope: cluster
 
 log:

@@ -465,7 +465,7 @@ spec:
             - name: RECONCILE_RESOURCES
               value: "CapacityReservation,DHCPOptions,EgressOnlyInternetGateway,ElasticIPAddress,FlowLog,Instance,InternetGateway,LaunchTemplate,ManagedPrefixList,NATGateway,NetworkACL,RouteTable,SecurityGroup,Subnet,TransitGateway,TransitGatewayVPCAttachment,VPC,VPCEndpoint,VPCEndpointServiceConfiguration,VPCPeeringConnection"
             - name: DELETION_POLICY
-              value: retain
+              value: delete
             - name: LEADER_ELECTION_NAMESPACE
               value: ""
             - name: ACK_LOG_LEVEL

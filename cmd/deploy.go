@@ -180,6 +180,10 @@ func (r *runner) deployPlane(out io.Writer, plane Plane, target string) error {
 		deployed[comp.Name] = true
 	}
 
+	if err := r.enablePrune(out, target, deployed); err != nil {
+		return err
+	}
+
 	profileSpace := variantSpace(profileComponent, flagVariant)
 	hasProfile, err := r.spaceExists(profileSpace)
 	if err != nil {
@@ -214,4 +218,77 @@ func (r *runner) deployPlane(out io.Writer, plane Plane, target string) error {
 		}
 	}
 	return nil
+}
+
+// enablePrune turns on Argo's prune for each component's Application, so that
+// removing config removes the resource it describes.
+//
+// Without it the config is not actually authoritative for existence: deleting a
+// Unit leaves its Kubernetes object, and therefore its AWS resource, running
+// forever. Deploy would create and nothing would ever destroy — which is a
+// strange thing for a system whose whole claim is that the data is the source of
+// truth.
+//
+// This is a patch rather than a template change because `cub variant create`
+// generates these Applications, and it belongs to cub rather than to this
+// plugin. Re-patching on every deploy is cheap and idempotent, and it keeps the
+// behaviour with the stack that depends on it.
+//
+// PAIRED WITH deletionPolicy: delete on the ACK controllers. Prune with retain
+// deletes the Kubernetes object and silently orphans the AWS resource, which is
+// worse than either alone — see src/ack-controllers/values/ec2.yaml.
+func (r *runner) enablePrune(out io.Writer, target string, deployed map[string]bool) error {
+	appsSpace, err := r.appsSpaceFor(target)
+	if err != nil {
+		return err
+	}
+	if appsSpace == "" {
+		// A target with no argo-apps-space annotation is not a cub-cluster
+		// target, so nothing generated an Application to patch.
+		return nil
+	}
+	patched := 0
+	for _, comp := range AllComponents() {
+		if !deployed[comp.Name] {
+			continue
+		}
+		unit := variantSpace(comp.Name, flagVariant)
+		has, err := r.unitExists(appsSpace, unit)
+		if err != nil {
+			return fmt.Errorf("checking Application Unit %s/%s: %w", appsSpace, unit, err)
+		}
+		if !has {
+			continue
+		}
+		if _, err := r.cub("function", "do", "--quiet", "--space", appsSpace, "--unit", unit,
+			"set-bool-path", "argoproj.io/v1alpha1/Application",
+			"spec.syncPolicy.automated.prune", "true"); err != nil {
+			return fmt.Errorf("enabling prune on %s/%s: %w", appsSpace, unit, err)
+		}
+		patched++
+	}
+	if patched == 0 {
+		return nil
+	}
+	// The apps Space is a bundle Argo pulls; the edit is inert until published.
+	if _, err := r.publishRelease(appsSpace); err != nil {
+		return fmt.Errorf("publishing %s after enabling prune: %w", appsSpace, err)
+	}
+	fmt.Fprintf(out, "\n==> prune enabled on %d Application(s) in %s\n", patched, appsSpace)
+	return nil
+}
+
+// appsSpaceFor resolves the Space holding a target's Argo Applications, from the
+// confighub.com/argo-apps-space annotation `cub cluster up` and `eksinf enroll`
+// stamp on the OCI target. Returns "" when the target carries no annotation.
+func (r *runner) appsSpaceFor(target string) (string, error) {
+	space, name, ok := strings.Cut(target, "/")
+	if !ok || space == "" || name == "" {
+		return "", nil
+	}
+	out, err := r.cub("target", "get", name, "--space", space, "-o", "json")
+	if err != nil {
+		return "", fmt.Errorf("reading target %s: %w", target, err)
+	}
+	return extractJSONString(out, "confighub.com/argo-apps-space"), nil
 }

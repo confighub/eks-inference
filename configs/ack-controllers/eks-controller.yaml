@@ -423,7 +423,7 @@ spec:
             - name: RECONCILE_RESOURCES
               value: "AccessEntry,Addon,Capability,Cluster,FargateProfile,IdentityProviderConfig,Nodegroup,PodIdentityAssociation"
             - name: DELETION_POLICY
-              value: retain
+              value: delete
             - name: LEADER_ELECTION_NAMESPACE
               value: ""
             - name: ACK_LOG_LEVEL

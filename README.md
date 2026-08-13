@@ -121,8 +121,8 @@ cub eksinf link-profile --list      # show the bindings and existing links
 cub eksinf link-profile --unlink    # remove them
 ```
 
-Nothing is running yet beyond the system nodegroup: every workload ships at
-`replicas: 0`, so installing costs nothing. To actually provision a GPU:
+No GPU is running yet: every workload that wants one ships at `replicas: 0`, so
+installing costs nothing. To actually provision a GPU:
 
 ```bash
 cub function do --space inference-workloads-dev --where "Slug = 'smoke-gpu'" set-replicas 1
@@ -133,6 +133,40 @@ Karpenter launches a `g6.xlarge` in about 90 seconds. Scale back to `0` and it i
 released. **Do not use `kubectl scale`** — the Argo Application syncs with
 `selfHeal: true`, so a manual scale is reverted within a minute, having reported
 success.
+
+## Talking to the model
+
+Scale up the model itself, wait for it to serve, then chat with it:
+
+```bash
+cub function do --space inference-workloads-dev --where "Slug = 'vllm-qwen'" set-replicas 1
+cub release publish inference-workloads-dev
+
+# ~10 min: Karpenter launches a node (~45s), it pulls a multi-GB image, then
+# vLLM downloads the model. Watch it with:
+kubectl --kubeconfig ~/.confighub/clusters/inference-demo.kubeconfig \
+  get pods -n inference -w
+
+# Then, from inside the cluster — no port-forward, nothing exposed:
+kubectl --kubeconfig ~/.confighub/clusters/inference-demo.kubeconfig \
+  exec -it -n inference deploy/chat -- chat
+```
+
+`-it` matters; without it you get no prompt. `/reset` clears the conversation,
+`/quit` exits. The client is the one thing here that ships at `replicas: 1` — it
+is a 10m-CPU pod on the system nodegroup, so it costs nothing and is always there
+to talk to. Before the model is up it reports a refused connection rather than
+hanging.
+
+The endpoint is OpenAI-compatible, so if you would rather see the wire format:
+
+```bash
+kubectl --kubeconfig ~/.confighub/clusters/inference-demo.kubeconfig \
+  exec -n inference deploy/chat -- \
+  curl -sS http://vllm-qwen.inference.svc.cluster.local:8000/v1/models
+```
+
+Scale `vllm-qwen` back to `0` when you are done — it holds the `g6.xlarge`.
 
 ## Taking it down
 
@@ -161,6 +195,63 @@ Kubernetes view.
 Add `--delete-config` to remove the ConfigHub Spaces too; without it the config
 survives and `cub eksinf deploy` can rebuild onto a fresh cluster. See
 [docs/teardown.md](./docs/teardown.md).
+
+## Hardening this for production
+
+This stack ships with a **full config-driven lifecycle**: Argo prunes, and the
+ACK controllers run `deletionPolicy: delete`. Config decides whether a resource
+exists, so removing a Unit removes the AWS resource it describes. Deploy creates,
+un-deploy destroys, and nothing is asymmetric.
+
+That is right for a demo you stand up and tear down repeatedly. It is probably
+wrong for infrastructure you would be sad to lose, where you want destruction to
+be hard and deliberate.
+
+**`cub eksinf` has no flag for any of this, and does not need one.** It wrote the
+configuration into ConfigHub and stopped; the configuration is yours. Every knob
+below is a `cub` command against config the plugin does not own.
+
+Replace `inference-demo` and `dev` with your cluster name and variant.
+
+```bash
+# 1. Stop Argo deleting resources when they leave the config.
+cub function do --space inference-demo-argo-apps --where "Slug LIKE '%-dev'" \
+  set-bool-path argoproj.io/v1alpha1/Application spec.syncPolicy.automated.prune false
+cub release publish inference-demo-argo-apps
+
+# 2. Stop ACK deleting the AWS resource when its object goes away.
+#    SET THESE TWO TOGETHER. Prune with retain is the worst combination: Argo
+#    deletes the Kubernetes object and the AWS resource silently survives,
+#    orphaned and billing, with nothing left that knows it exists.
+cub function do --space ack-controllers-dev --where "Slug LIKE '%-controller'" \
+  set-env-var controller DELETION_POLICY retain
+cub release publish ack-controllers-dev
+
+# 3. Refuse a sync that would empty an Application entirely — the blast radius
+#    of a bad bundle, rather than of a single bad Unit.
+cub function do --space inference-demo-argo-apps --where "Slug LIKE '%-dev'" \
+  set-bool-path argoproj.io/v1alpha1/Application spec.syncPolicy.automated.allowEmpty false
+cub release publish inference-demo-argo-apps
+
+# 4. Protect the expensive, slow-to-rebuild things individually. A delete gate
+#    refuses deletion of the Unit itself, so it survives a --recursive space
+#    delete and anything else that sweeps broadly.
+cub unit update --space eks-cluster-dev cluster  --delete-gate protected=true
+cub unit update --space aws-network-dev network  --delete-gate protected=true
+```
+
+Verify what you changed, rather than trusting that you did:
+
+```bash
+cub unit data eks-cluster-dev --space inference-demo-argo-apps | grep -A4 syncPolicy
+cub unit data ec2-controller --space ack-controllers-dev | grep -A1 DELETION_POLICY
+```
+
+Note that `cub eksinf deploy` re-enables prune on every run, because it is the
+behaviour this stack's teardown assumes. If you have hardened a deployment, run
+step 1 again after any deploy — or stop using `deploy` for that variant and drive
+it with `cub variant create` and `cub release publish` directly, which is all
+`deploy` was doing on your behalf.
 
 ## The two apply planes
 

@@ -1,0 +1,108 @@
+---
+# A text-mode chat client for the vLLM endpoint, run from inside the cluster.
+#
+#   kubectl exec -it -n inference deploy/chat -- chat
+#
+# It talks to the in-cluster Service, so there is no port-forward, no ingress and
+# nothing exposed. The endpoint is OpenAI-compatible, so the same client works
+# against api.openai.com by changing VLLM_URL and adding an Authorization header
+# — which is the point of vLLM serving that API rather than one of its own.
+#
+# UNLIKE EVERYTHING ELSE HERE, THIS SHIPS AT replicas: 1. The other workloads
+# ship at 0 because they want a GPU node, which costs real money. This is a
+# 10m-CPU pod that schedules onto the system nodegroup that already exists, so
+# leaving it running costs nothing and means there is always something to talk to
+# the model with. It is a client, not a workload.
+#
+# It is useless until vllm-qwen is scaled up, and says so — a connection refused
+# is reported rather than swallowed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chat
+  namespace: inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "30"
+data:
+  chat: |
+    #!/bin/sh
+    # Multi-turn chat. The OpenAI API is stateless: the whole conversation is
+    # re-sent every turn, so history lives here, in the client.
+    API="${VLLM_URL}"
+    MODEL="${VLLM_MODEL}"
+    HIST='[]'
+    printf '\n  endpoint : %s\n  model    : %s\n' "$API" "$MODEL"
+    printf '  commands : /reset clears history, /quit exits\n\n'
+    while : ; do
+      printf '\033[1;36myou>\033[0m '
+      IFS= read -r line || break
+      case "$line" in
+        '')      continue ;;
+        /quit)   break ;;
+        /reset)  HIST='[]'; printf '  (history cleared)\n'; continue ;;
+      esac
+      HIST=$(printf '%s' "$HIST" | jq -c --arg c "$line" '. + [{role:"user",content:$c}]')
+      req=$(jq -n --arg m "$MODEL" --argjson msgs "$HIST" \
+        '{model:$m, messages:$msgs, temperature:0.7, max_tokens:512}')
+      resp=$(curl -sS --max-time 120 "$API/v1/chat/completions" \
+        -H 'Content-Type: application/json' -d "$req" 2>&1)
+      msg=$(printf '%s' "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+      if [ -z "$msg" ]; then
+        # Show what actually came back. A vLLM error is JSON with a message
+        # field; a refused connection is curl's text, which is what you get
+        # when vllm-qwen is still at replicas: 0. Both beat "something failed".
+        printf '\033[1;31merr>\033[0m %s\n\n' \
+          "$(printf '%s' "$resp" | jq -r '.error.message // .message // .' 2>/dev/null || printf '%s' "$resp")"
+        continue
+      fi
+      printf '\033[1;32mbot>\033[0m %s\n\n' "$msg"
+      HIST=$(printf '%s' "$HIST" | jq -c --arg c "$msg" '. + [{role:"assistant",content:$c}]')
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat
+  namespace: inference
+  annotations:
+    argocd.argoproj.io/sync-wave: "30"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: chat}
+  template:
+    metadata:
+      labels: {app: chat}
+    spec:
+      # No GPU and no nodeSelector: this belongs on the system nodes, which are
+      # arm64. alpine is multi-arch, so nothing here is architecture-specific.
+      containers:
+      - name: chat
+        image: alpine:3.20
+        # curl and jq are installed at start rather than baked into an image, so
+        # this component needs no registry of its own. Egress goes through the
+        # NAT gateway aws-network creates.
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          apk add --no-cache curl jq >/dev/null 2>&1 || exit 1
+          install -m 0755 /cm/chat /usr/local/bin/chat
+          exec sleep infinity
+        env:
+        - name: VLLM_URL
+          value: http://vllm-qwen.inference.svc.cluster.local:8000
+        # Must match the --model vllm-qwen serves: the OpenAI API rejects a
+        # completion request whose model id it does not recognise.
+        - name: VLLM_MODEL
+          value: Qwen/Qwen2.5-7B-Instruct-AWQ
+        volumeMounts:
+        - name: cm
+          mountPath: /cm
+        resources:
+          requests: {cpu: 10m, memory: 32Mi}
+          limits: {memory: 128Mi}
+      volumes:
+      - name: cm
+        configMap:
+          name: chat
+          defaultMode: 0755
