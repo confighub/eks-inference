@@ -13,6 +13,16 @@ import (
 // fork can install its own.
 const defaultRegistry = "ghcr.io/confighub/configs/eks-inference"
 
+// stackOwner is the value of the well-known "Owner" Space label, which groups
+// this stack's Spaces together in the component view.
+//
+// It is stamped on the component BASES and nowhere else, because that is
+// sufficient: `cub variant create` inherits Component, Layer and Owner from the
+// upstream Space. Every downstream variant therefore picks it up without this
+// plugin setting it again, including variants somebody creates by hand with
+// plain `cub variant create` and never tells the plugin about.
+const stackOwner = "EKS Inference"
+
 func newInstallCmd() *cobra.Command {
 	var registry string
 	var dryRun, recreate, prune bool
@@ -111,6 +121,7 @@ Downstream variants are NOT touched. After updating a base, promote it:
 				args := []string{"variant", "upload",
 					"--component", comp.Name, "--variant", "base",
 					"--granularity", baseGranularity,
+					"--owner", stackOwner,
 					"--label", "managed-by=eks-inference"}
 				if dryRun {
 					args = append(args, "--dry-run")

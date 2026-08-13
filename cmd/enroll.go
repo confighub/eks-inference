@@ -274,7 +274,10 @@ func (r *runner) enrollPreflight(kc string, o *enrollOpts, w interface{ Write([]
 func (r *runner) enrollConfigHubSide(o *enrollOpts, w interface{ Write([]byte) (int, error) }) error {
 	appsSpace := o.name + "-argo-apps"
 
-	if _, err := r.cub("space", "create", o.name, "--allow-exists"); err != nil {
+	// The cluster Spaces are not variants, so they inherit nothing — the Owner
+	// label is set here so they group with the rest of the stack rather than
+	// showing up unattributed next to it.
+	if _, err := r.cub("space", "create", o.name, "--label", "Owner="+stackOwner, "--allow-exists"); err != nil {
 		return fmt.Errorf("creating Space %s: %w", o.name, err)
 	}
 	// A server-hosted worker: ConfigHub runs it, nothing is deployed to the
@@ -294,7 +297,7 @@ func (r *runner) enrollConfigHubSide(o *enrollOpts, w interface{ Write([]byte) (
 	}
 	fmt.Fprintf(w, "  space %s: worker + OCI target\n", o.name)
 
-	if _, err := r.cub("space", "create", appsSpace, "--allow-exists"); err != nil {
+	if _, err := r.cub("space", "create", appsSpace, "--label", "Owner="+stackOwner, "--allow-exists"); err != nil {
 		return fmt.Errorf("creating Space %s: %w", appsSpace, err)
 	}
 	// Cross-space release target: the apps Space's bundle is served by the OCI
