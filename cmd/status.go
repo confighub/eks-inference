@@ -71,6 +71,17 @@ Two rules this command follows, both learned by getting them wrong:
 			rep.Billing = r.billing(region, &rep)
 			mgmt, workload := r.discoverClusters()
 			rep.MgmtCluster, rep.WorkloadCluster = mgmt, workload
+
+			// Reading the wrong account reports "nothing running" for a stack
+			// that is running, which is worse than reporting nothing at all —
+			// this is the command people check before deciding to leave a stack
+			// up. Warn rather than fail: status is read-only, and a partial
+			// answer with a caveat beats refusing to answer.
+			if mgmt != "" {
+				if err := r.requireMatchingAccount(cubClusterKubeconfig(mgmt), io.Discard); err != nil {
+					fmt.Fprintf(out, "!! %v\n\n", err)
+				}
+			}
 			rep.Karpenter = r.karpenterState(workload, &rep)
 
 			if asJSON {

@@ -1,7 +1,10 @@
 # ACK EKS controller — provisions the cluster, its addons, and the system nodegroup.
 #
-# See ec2.yaml for why deletionPolicy is retain. It matters most here: a pruned
-# eks.services.k8s.aws/Cluster would tear down the control plane.
+# See ec2.yaml for why deletionPolicy is delete, and why prune and deletionPolicy
+# have to agree. The stakes are highest here: removing the
+# eks.services.k8s.aws/Cluster Unit from config tears down the control plane, and
+# that is the intended behaviour. Guard it with a delete gate rather than by
+# disagreeing with the other two controllers.
 aws:
   # PLACEHOLDER, deliberately. The region is not knowable at render time — it
   # belongs to the environment, not to the chart — so it renders as the ConfigHub
@@ -18,7 +21,7 @@ aws:
     secretKey: credentials
     profile: default
 
-deletionPolicy: retain
+deletionPolicy: delete
 installScope: cluster
 
 log:

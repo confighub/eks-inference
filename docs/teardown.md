@@ -1,15 +1,21 @@
 # Teardown
 
-**Deleting ConfigHub Units does not delete AWS resources.** All three ACK
-controllers run with `deletionPolicy: retain`, so removing a Unit, letting Argo
-prune it, or deleting the kind cluster leaves the VPC, NAT gateway, and EKS
-cluster running and billing.
+**Deleting ConfigHub Units DOES delete AWS resources.** Argo prunes, and all
+three ACK controllers run with `deletionPolicy: delete`, so removing a Unit and
+publishing removes the VPC, NAT gateway, or EKS cluster it describes. Config
+decides whether a resource exists.
 
-That is deliberate. Argo CD prunes anything that leaves its bundle, and a pruned
-ACK resource means a deleted AWS resource — an accidental prune would otherwise
-delete an EKS control plane. Retain makes that class of accident inert.
+That is deliberate, and it is the opposite of what this stack shipped before.
+Retain used to make an accidental deletion inert — at the cost of forcing every
+teardown to annotate each resource, publish, and wait for Argo before deleting
+anything. A partial rollout of that annotation left resources ACK could no longer
+reach, recoverable only by hand in the AWS console. That happened.
 
-The cost is that teardown is explicit. It will not happen by itself.
+Deleting the kind cluster still leaves everything running, under either policy:
+without the controllers, nothing acts on the deletion.
+
+If you want destruction to be hard, see "Hardening this for production" in
+README.md — it is a handful of `cub` commands, and needs no plugin flag.
 
 ## Ordered teardown
 

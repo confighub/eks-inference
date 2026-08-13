@@ -392,7 +392,7 @@ spec:
             - name: RECONCILE_RESOURCES
               value: "Group,InstanceProfile,OpenIDConnectProvider,Policy,Role,ServiceLinkedRole,User"
             - name: DELETION_POLICY
-              value: retain
+              value: delete
             - name: LEADER_ELECTION_NAMESPACE
               value: ""
             - name: ACK_LOG_LEVEL

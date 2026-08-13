@@ -518,7 +518,105 @@ func (r *runner) requireControllerCredentials(w io.Writer) error {
 		}
 	}
 	fmt.Fprintln(w, "  ACK controller credentials: present, no recent auth errors")
-	return nil
+
+	return r.requireMatchingAccount(kc, w)
+}
+
+// requireMatchingAccount refuses to continue when this command's AWS identity is
+// in a different account from the one the ACK controllers built the stack in.
+//
+// THIS IS THE CHECK WHOSE ABSENCE LEFT AN IAM ROLE STRANDED. Teardown run
+// without --profile used ambient credentials pointing at an unrelated account.
+// ACK, holding its own Secret, correctly destroyed the VPC — while every AWS
+// call this binary made went to the wrong account and found nothing. So
+// releaseKarpenterInstanceProfiles listed instance profiles that did not exist,
+// silently deleted none, and the node role then hung on DeleteConflict forever.
+// Worse, verifyNothingLeft would have reported the stack clean, because the
+// account it was looking at genuinely was.
+//
+// Nothing errored. Every individual call succeeded against the wrong account,
+// which is precisely why this needs an explicit check rather than better error
+// handling.
+//
+// The two identities are deliberately NOT collapsed into one. They do different
+// jobs: `creds create-user` mints the scoped IAM user before that Secret exists,
+// and `enroll --grant-access` grants cluster-admin to the CALLER — using the
+// controllers' identity there would hand access to the wrong principal. Both
+// identities are legitimate; only their silently disagreeing is not.
+func (r *runner) requireMatchingAccount(kc string, w io.Writer) error {
+	ackAccount := r.controllerAccount(kc)
+	if ackAccount == "" {
+		// Nothing deployed yet, or no resource carries an account. There is no
+		// stack to mismatch with, so this is not a failure.
+		return nil
+	}
+	id, err := r.callerIdentity()
+	if err != nil {
+		return fmt.Errorf("cannot determine this command's AWS identity to compare "+
+			"against the controllers' account %s: %w", ackAccount, err)
+	}
+	if id.Account == ackAccount {
+		fmt.Fprintf(w, "  AWS account: %s (matches the ACK controllers)\n", id.Account)
+		return nil
+	}
+	return fmt.Errorf(
+		"AWS account mismatch.\n"+
+			"  this command:     %s  (%s)\n"+
+			"  ACK controllers:  %s  (the account the stack was actually built in)\n"+
+			"Every AWS call made here would go to the wrong account and quietly find\n"+
+			"nothing, leaving IAM roles and instance profiles stranded while reporting\n"+
+			"success. Pass --profile NAME for the account above, or export AWS_PROFILE.",
+		id.Account, profileDescription(), ackAccount)
+}
+
+// profileDescription names where this command's credentials came from, so the
+// mismatch message says which knob to turn.
+func profileDescription() string {
+	if flagProfile != "" {
+		return "--profile " + flagProfile
+	}
+	return "ambient credentials, no --profile given"
+}
+
+// controllerAccount reports the AWS account the ACK controllers are acting in,
+// read back from a resource they created rather than from their credentials.
+//
+// ACK stamps the real AWS resource's ARN into status, and an ARN carries its
+// account, so this needs no access to the mounted Secret. ownerAccountID is
+// preferred where the controller populates it; the ARN is the fallback because
+// it is present on everything that reached AWS at all.
+func (r *runner) controllerAccount(kc string) string {
+	out, err := r.kubectl(kc, "get", ackKinds, "-n", "aws-inference", "-o",
+		`jsonpath={range .items[*]}{.status.ackResourceMetadata.ownerAccountID}{"\t"}{.status.ackResourceMetadata.arn}{"\n"}{end}`)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if acct := parseAccountLine(line); acct != "" {
+			return acct
+		}
+	}
+	return ""
+}
+
+// parseAccountLine pulls an account id out of one "<ownerAccountID>\t<arn>"
+// line. Split out to be tested: it cannot fail loudly — a wrong answer compares
+// against the wrong account, which is the exact failure being guarded against.
+func parseAccountLine(line string) string {
+	// Cut BEFORE trimming. ownerAccountID is empty on most resources, so the
+	// line begins with the separator — and TrimSpace would eat it, collapsing
+	// the two fields into one and yielding the whole ARN as the "account".
+	owner, arn, _ := strings.Cut(strings.TrimRight(line, "\r\n"), "\t")
+	owner, arn = strings.TrimSpace(owner), strings.TrimSpace(arn)
+	if owner != "" {
+		return owner
+	}
+	// arn:aws:iam::025066259430:role/inference-demo-node-role
+	//  0   1   2       3   4
+	if f := strings.Split(arn, ":"); len(f) >= 6 && f[0] == "arn" && f[4] != "" {
+		return f[4]
+	}
+	return ""
 }
 
 // waitForArgoStopped blocks until no application-controller pod is running.

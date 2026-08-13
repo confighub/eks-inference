@@ -1,9 +1,24 @@
 # ACK EC2 controller — provisions the VPC, subnets, gateways, and route tables.
 #
-# deletionPolicy: retain is deliberate and applies to every resource this
-# controller manages. Argo CD prunes anything that leaves its bundle, and a
-# pruned ACK resource means a deleted AWS resource. Retain makes that class of
-# accident inert; teardown is an explicit operation instead. See docs/teardown.md.
+# deletionPolicy: delete is deliberate and applies to every resource this
+# controller manages. Together with prune on the Argo Applications it gives the
+# stack a full config-driven lifecycle: config is what decides a resource exists,
+# so removing it from config removes it from AWS.
+#
+# It was retain, on the reasoning that a pruned ACK resource means a deleted AWS
+# resource. That is true, and is now the point rather than the hazard. Retain
+# also had a cost that was not obvious: it is what forced teardown to annotate
+# every resource, publish, and wait for Argo before deleting anything — and a
+# partial rollout of that annotation leaves resources ACK can no longer reach,
+# recoverable only by hand in the console.
+#
+# THE PAIRING MATTERS. prune with retain is the worst of both: Argo deletes the
+# Kubernetes object and the AWS resource silently survives, orphaned and billing,
+# with nothing left that knows it exists. If you set one back, set both.
+#
+# To run this stack somewhere that destruction should be hard, flip it back —
+# no plugin flag required, the config is yours. See "Hardening this for
+# production" in README.md.
 aws:
   # PLACEHOLDER, deliberately. The region is not knowable at render time — it
   # belongs to the environment, not to the chart — so it renders as the ConfigHub
@@ -20,7 +35,7 @@ aws:
     secretKey: credentials
     profile: default
 
-deletionPolicy: retain
+deletionPolicy: delete
 installScope: cluster
 
 log:
