@@ -239,6 +239,17 @@ Any value whose location is positional wants a setter rather than a path.
 What genuinely remains unlinkable is a value a chart consumes without emitting —
 one that changes *which* resources are rendered rather than what is in them.
 
+**The links claim what they write (`--protect`).** A write records no claim on
+the paths it touches unless it asks to, so an unclaimed profile value is the next
+`cub variant promote` to overwrite: the base Unit still carries
+`confighubplaceholder` at exactly these paths, and a bundle bump that changes one
+of them wins the merge. `link-profile` therefore creates and patches every Link
+with `--protect`, which records each path the resolve writes as a local override
+the merge must leave alone. The link is the only thing that will ever decide
+these values, which is the case the flag exists for; it is refused on
+`UpgradeUnit` and `MergeUnits` Links, whose whole point is that the upstream
+keeps delivering.
+
 ### Derived values
 
 Values that must be *computed* rather than copied — an ARN built from account ID

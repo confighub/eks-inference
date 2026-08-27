@@ -18,8 +18,8 @@ cub eksinf --help
 ```
 
 The plugin is the admin tool for this stack. You do not need this repo checked
-out to use it. Needs **cub v0.2.14 or newer** — `install` re-uploads into an
-existing Space, which older versions cannot do.
+out to use it. Needs **cub v0.4.0 or newer** — pre-1.0 the second version number
+is the API version, and v0.4 is the API this plugin speaks.
 
 ## First, the component bases
 
@@ -375,7 +375,7 @@ renames a Unit.
 cub eksinf install
 ```
 
-Re-running install takes the current bundles (needs cub v0.2.14+). A re-upload 3-way merges the new
+Re-running install takes the current bundles. A re-upload 3-way merges the new
 bundle against the last one, so Unit IDs, target bindings and links survive, and
 so do changes made in ConfigHub afterwards — which matters here, because
 `link-profile` and the `set-env-var` setters mutate Units after upload. A bundle

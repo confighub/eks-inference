@@ -38,8 +38,8 @@ Target and are never deployed; use 'eksinf deploy' for that.
 Run it again whenever the bundles are republished. A re-upload 3-way merges the
 new bundle against the last one, so Unit IDs, target bindings and upstream links
 survive, and anything changed in ConfigHub after the upload survives with them.
-A bundle that has not moved is a no-op. Needs cub v0.2.14 or newer; older
-versions have no re-upload and fail here with "already exists".
+A bundle that has not moved is a no-op. Needs cub v0.4.0 or newer: that is the
+API version this plugin speaks, and cub itself refuses a server on another one.
 
 --prune additionally EMPTIES Units the bundle no longer produces. Off by default,
 because emptying a base Unit propagates to every downstream that promotes from it
@@ -258,13 +258,19 @@ func revertCommand(out string) string {
 
 // minCubVersion is a HARD FLOOR for install, for the same reason the Argo CD
 // version is one for enroll: below it the command cannot work, and the way it
-// fails does not say so. cub gained re-upload in v0.2.14; older builds cannot
-// upload into a populated Space and fail with "already exists", which reads
-// like a bug in this plugin rather than a version skew.
+// fails does not say so.
+//
+// Pre-1.0 the second version number is the API version, so the floor names an
+// API rather than a feature: every command below is spelled the way v0.4 spells
+// it, and the responses it parses carry the field names v0.4 settled on.
+//
+// cub refuses outright to run against a server on a different API version, so
+// the server is the real floor and this check only turns a wall of per-command
+// failures into one message naming the fix.
 //
 // The plugin installs from GitHub releases and upgrades independently of cub,
 // so the skew is ordinary rather than exotic.
-const minCubVersion = "v0.2.14"
+const minCubVersion = "v0.4.0"
 
 // requireCubVersion fails when the cub on PATH is older than min.
 //
