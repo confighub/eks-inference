@@ -450,14 +450,21 @@ func (r *runner) linkProfile(out interface{ Write([]byte) (int, error) }, profil
 		if err != nil {
 			return err
 		}
+		// --protect: a write claims nothing unless it says so, so without this
+		// the profile's values are the next `variant promote` to overwrite —
+		// the base still carries confighubplaceholder at exactly these paths,
+		// and a bundle that changes one of them wins the merge. The link is the
+		// only thing that will ever decide these values, so it claims them. It
+		// is refused on UpgradeUnit and MergeUnits links; TransformPaths is
+		// what it exists for.
 		if existing == "" {
 			if _, err := r.cubStdin(body, "link", "create", "--space", space, "-", k.unit,
 				profileUnit, profileSpace, "--update-type", "TransformPaths",
-				"--auto-update", "--from-stdin"); err != nil {
+				"--auto-update", "--protect", "--from-stdin"); err != nil {
 				return fmt.Errorf("linking %s/%s: %w", space, k.unit, err)
 			}
 		} else if _, err := r.cubStdin(body, "link", "update", existing,
-			"--space", space, "--patch", "--from-stdin"); err != nil {
+			"--space", space, "--patch", "--protect", "--from-stdin"); err != nil {
 			return fmt.Errorf("updating link %s in %s: %w", existing, space, err)
 		}
 		fmt.Fprintf(out, "  %s/%s: %d path(s), %d setter(s)\n", space, k.unit, len(groups[k]), len(envs))
