@@ -286,11 +286,20 @@ func (r *runner) enrollConfigHubSide(o *enrollOpts, w interface{ Write([]byte) (
 		"--is-server-worker", "--allow-exists"); err != nil {
 		return fmt.Errorf("creating worker in %s: %w", o.name, err)
 	}
-	// -p/-t are REQUIRED: target create defaults to Kubernetes/Kubernetes-YAML,
-	// which a server-hosted worker does not support, and the resulting error
-	// names the provider type rather than the flag you forgot.
-	if _, err := r.cub("target", "create", "target", "{}", "worker",
-		"--space", o.name, "-p", "OCI", "-t", "Any",
+	// Argo pulls as the worker, so the worker's bot user needs View and
+	// ViewChildren on the Target: ViewChildren authorizes pulling the Releases
+	// published for it, and View lets argobot, running as the same worker, find it.
+	workerOut, err := r.cub("worker", "get", "worker", "--space", o.name, "-o", "json")
+	if err != nil {
+		return fmt.Errorf("reading worker in %s: %w", o.name, err)
+	}
+	botUserID := extractJSONAt(workerOut, "BridgeWorker", "UserID")
+	if botUserID == "" {
+		return fmt.Errorf("could not read the bot user of %s/worker", o.name)
+	}
+	if _, err := r.cub("target", "create", "target",
+		"--space", o.name,
+		"--permission", "View:"+botUserID, "--permission", "ViewChildren:"+botUserID,
 		"--annotation", "confighub.com/argo-apps-space="+appsSpace,
 		"--allow-exists"); err != nil {
 		return fmt.Errorf("creating OCI target in %s: %w", o.name, err)
