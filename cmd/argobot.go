@@ -42,8 +42,8 @@ const (
 	argobotOCIRef = "oci://ghcr.io/confighub/configs/argobot"
 	// argobotNamespace is where argobot's manifests deploy.
 	argobotNamespace = "argobot"
-	// argobotUnitSlug is the Unit for argobot's single manifest file, a
-	// consequence of --granularity per-file.
+	// argobotUnitSlug is the Unit holding argobot's Deployment: cub names a
+	// workload's Unit after the workload.
 	argobotUnitSlug = "argobot"
 	// argobotContainer is the container name in argobot's Deployment.
 	argobotContainer = "argobot"
@@ -86,14 +86,12 @@ func (r *runner) installArgobot(kc string, o *enrollOpts, w io.Writer) error {
 
 	space := argobotSpace(o.name)
 
-	// 1. The shared base, from argobot's published bundle. --granularity
-	// per-file keeps the single manifest file as one Unit; --allow-exists makes
-	// this a no-op once any cluster on this hub has installed it.
+	// 1. The shared base, from argobot's published bundle. An upload is
+	// create-or-update, so once any cluster on this hub has installed it this
+	// matches the bundle and changes nothing.
 	if _, err := r.cub("variant", "upload",
 		"--component", argobotComponent,
 		"--variant", argobotBaseVariant,
-		"--granularity", "per-file",
-		"--allow-exists",
 		argobotOCIRef); err != nil {
 		return fmt.Errorf("installing the argobot base component: %w", err)
 	}

@@ -1,6 +1,6 @@
 # NodePools: WHEN to launch a node and WHAT it may be. This is the file you edit
-# most — instance families, capacity types, limits, disruption behaviour — which
-# is why it is its own Unit under --granularity per-file.
+# most — instance families, capacity types, limits, disruption behaviour. Each
+# NodePool is its own Unit, named <pool>-nodepool.
 #
 # Three pools, in increasing order of cost and decreasing order of availability:
 #

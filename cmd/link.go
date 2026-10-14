@@ -9,8 +9,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// A binding: one value read from the platform-profile, written to one path in
-// one component's Unit.
+// A binding: one value read from the platform-profile, written to one path of
+// one resource in one component. Each resource is its own Unit, found by the
+// resource it holds (see unitFor), so a binding names the resource, not a Unit.
 //
 // THE ~1 ESCAPE IS THE WHOLE TRICK. ConfigHub path expressions split on ".", and
 // "~1" escapes a literal "." inside a segment. Kubernetes and AWS tag keys are
@@ -25,8 +26,7 @@ import (
 // escaping are both rejected outright, which is at least loud. See
 // confighubai/confighub#4903.
 type binding struct {
-	Component string // component whose Unit receives the value
-	Unit      string // Unit within that component
+	Component string // component whose resource receives the value
 	Field     string // template parameter name; also the profile field unless Upstream is set
 	Type      string // downstream resource type
 	Resource  string // downstream resource name ("namespace/name", or "/name" if cluster-scoped)
@@ -49,24 +49,24 @@ func (b binding) upstreamPathFor() string {
 // chart's values.yaml — karpenter's settings.clusterName — cannot be linked:
 // they are resolved at render time, before ConfigHub ever sees them.
 var profileBindings = []binding{
-	{"karpenter", "nodeclasses", "networkName", "karpenter.k8s.aws/v1/EC2NodeClass", "/general",
+	{"karpenter", "networkName", "karpenter.k8s.aws/v1/EC2NodeClass", "/general",
 		"spec.subnetSelectorTerms.0.tags.karpenter~1sh/discovery", ""},
-	{"karpenter", "nodeclasses", "networkName", "karpenter.k8s.aws/v1/EC2NodeClass", "/general",
+	{"karpenter", "networkName", "karpenter.k8s.aws/v1/EC2NodeClass", "/general",
 		"spec.securityGroupSelectorTerms.0.tags.karpenter~1sh/discovery", ""},
-	{"karpenter", "nodeclasses", "networkName", "karpenter.k8s.aws/v1/EC2NodeClass", "/gpu",
+	{"karpenter", "networkName", "karpenter.k8s.aws/v1/EC2NodeClass", "/gpu",
 		"spec.subnetSelectorTerms.0.tags.karpenter~1sh/discovery", ""},
-	{"karpenter", "nodeclasses", "networkName", "karpenter.k8s.aws/v1/EC2NodeClass", "/gpu",
+	{"karpenter", "networkName", "karpenter.k8s.aws/v1/EC2NodeClass", "/gpu",
 		"spec.securityGroupSelectorTerms.0.tags.karpenter~1sh/discovery", ""},
-	{"karpenter", "nodeclasses", "nodeRoleName", "karpenter.k8s.aws/v1/EC2NodeClass", "/general", "spec.role", ""},
-	{"karpenter", "nodeclasses", "nodeRoleName", "karpenter.k8s.aws/v1/EC2NodeClass", "/gpu", "spec.role", ""},
-	{"karpenter", "nodeclasses", "gpuAMIAlias", "karpenter.k8s.aws/v1/EC2NodeClass", "/gpu",
+	{"karpenter", "nodeRoleName", "karpenter.k8s.aws/v1/EC2NodeClass", "/general", "spec.role", ""},
+	{"karpenter", "nodeRoleName", "karpenter.k8s.aws/v1/EC2NodeClass", "/gpu", "spec.role", ""},
+	{"karpenter", "gpuAMIAlias", "karpenter.k8s.aws/v1/EC2NodeClass", "/gpu",
 		"spec.amiSelectorTerms.0.alias", ""},
 	// Cross-plane: these Units are applied by the kind cluster while the ones
 	// above are applied by EKS. A ConfigHub link spans that boundary without
 	// either cluster knowing the other exists.
-	{"eks-cluster", "cluster", "clusterName", "eks.services.k8s.aws/v1alpha1/Cluster",
+	{"eks-cluster", "clusterName", "eks.services.k8s.aws/v1alpha1/Cluster",
 		"aws-inference/inference-demo", "spec.name", ""},
-	{"eks-cluster", "nodegroup", "nodeRoleName", "eks.services.k8s.aws/v1alpha1/Nodegroup",
+	{"eks-cluster", "nodeRoleName", "eks.services.k8s.aws/v1alpha1/Nodegroup",
 		"aws-inference/inference-demo-system", "spec.nodeRoleRef.from.name", ""},
 
 	// Availability zones. Six subnets draw from three profile values, so the
@@ -75,17 +75,17 @@ var profileBindings = []binding{
 	// These matter as much as the region: an AZ string encodes the region, so
 	// leaving them literal while the region is linked gives a half-parameterised
 	// stack where the controllers move and the subnets do not.
-	{"aws-network", "network", "az0", subnetType, "aws-inference/inference-demo-private-a",
+	{"aws-network", "az0", subnetType, "aws-inference/inference-demo-private-a",
 		"spec.availabilityZone", "spec.availabilityZones.0"},
-	{"aws-network", "network", "az1", subnetType, "aws-inference/inference-demo-private-b",
+	{"aws-network", "az1", subnetType, "aws-inference/inference-demo-private-b",
 		"spec.availabilityZone", "spec.availabilityZones.1"},
-	{"aws-network", "network", "az2", subnetType, "aws-inference/inference-demo-private-c",
+	{"aws-network", "az2", subnetType, "aws-inference/inference-demo-private-c",
 		"spec.availabilityZone", "spec.availabilityZones.2"},
-	{"aws-network", "network", "az0", subnetType, "aws-inference/inference-demo-public-a",
+	{"aws-network", "az0", subnetType, "aws-inference/inference-demo-public-a",
 		"spec.availabilityZone", "spec.availabilityZones.0"},
-	{"aws-network", "network", "az1", subnetType, "aws-inference/inference-demo-public-b",
+	{"aws-network", "az1", subnetType, "aws-inference/inference-demo-public-b",
 		"spec.availabilityZone", "spec.availabilityZones.1"},
-	{"aws-network", "network", "az2", subnetType, "aws-inference/inference-demo-public-c",
+	{"aws-network", "az2", subnetType, "aws-inference/inference-demo-public-c",
 		"spec.availabilityZone", "spec.availabilityZones.2"},
 
 	// The address plan. Same positional convention as the zones: entry 0 of each
@@ -97,22 +97,22 @@ var profileBindings = []binding{
 	// up, joins, and then cannot talk to its peers, with no error naming the
 	// rule. That is the same shape as karpenter.sh/discovery and the reason
 	// this profile exists.
-	{"aws-network", "network", "vpcCIDR", vpcType, "aws-inference/inference-demo-vpc",
+	{"aws-network", "vpcCIDR", vpcType, "aws-inference/inference-demo-vpc",
 		"spec.cidrBlocks.0", ""},
-	{"aws-network", "network", "vpcCIDR", sgType, "aws-inference/inference-demo-cluster-sg",
+	{"aws-network", "vpcCIDR", sgType, "aws-inference/inference-demo-cluster-sg",
 		"spec.ingressRules.0.ipRanges.0.cidrIP", ""},
 
-	{"aws-network", "network", "pubCIDR0", subnetType, "aws-inference/inference-demo-public-a",
+	{"aws-network", "pubCIDR0", subnetType, "aws-inference/inference-demo-public-a",
 		"spec.cidrBlock", "spec.publicSubnetCIDRs.0"},
-	{"aws-network", "network", "pubCIDR1", subnetType, "aws-inference/inference-demo-public-b",
+	{"aws-network", "pubCIDR1", subnetType, "aws-inference/inference-demo-public-b",
 		"spec.cidrBlock", "spec.publicSubnetCIDRs.1"},
-	{"aws-network", "network", "pubCIDR2", subnetType, "aws-inference/inference-demo-public-c",
+	{"aws-network", "pubCIDR2", subnetType, "aws-inference/inference-demo-public-c",
 		"spec.cidrBlock", "spec.publicSubnetCIDRs.2"},
-	{"aws-network", "network", "privCIDR0", subnetType, "aws-inference/inference-demo-private-a",
+	{"aws-network", "privCIDR0", subnetType, "aws-inference/inference-demo-private-a",
 		"spec.cidrBlock", "spec.privateSubnetCIDRs.0"},
-	{"aws-network", "network", "privCIDR1", subnetType, "aws-inference/inference-demo-private-b",
+	{"aws-network", "privCIDR1", subnetType, "aws-inference/inference-demo-private-b",
 		"spec.cidrBlock", "spec.privateSubnetCIDRs.1"},
-	{"aws-network", "network", "privCIDR2", subnetType, "aws-inference/inference-demo-private-c",
+	{"aws-network", "privCIDR2", subnetType, "aws-inference/inference-demo-private-c",
 		"spec.cidrBlock", "spec.privateSubnetCIDRs.2"},
 }
 
@@ -124,7 +124,6 @@ const (
 
 const (
 	profileComponent = "platform-profile"
-	profileUnit      = "profile"
 	profileKind      = "eks-inference.confighub.com/v1/PlatformProfile"
 	profileResource  = "/inference-demo"
 )
@@ -164,10 +163,10 @@ type argument struct {
 	Evaluator string `json:"Evaluator,omitempty"`
 }
 
-// envBinding fills a container env var on a Unit from a profile field.
+// envBinding fills a container env var on a Deployment from a profile field.
 type envBinding struct {
 	Component string
-	Unit      string
+	Resource  string // the Deployment, as "namespace/name"
 	Field     string // profile spec field to read
 	Container string // container name, or "*" for any
 	EnvVar    string // env var to set
@@ -176,14 +175,14 @@ type envBinding struct {
 // The ACK controllers all render AWS_REGION as a literal placeholder; the region
 // belongs to the environment, not the chart.
 var profileEnvBindings = []envBinding{
-	{"ack-controllers", "ec2-controller", "region", "controller", "AWS_REGION"},
-	{"ack-controllers", "iam-controller", "region", "controller", "AWS_REGION"},
-	{"ack-controllers", "eks-controller", "region", "controller", "AWS_REGION"},
+	{"ack-controllers", "ack-system/ack-ec2-ec2-chart", "region", "controller", "AWS_REGION"},
+	{"ack-controllers", "ack-system/ack-iam-iam-chart", "region", "controller", "AWS_REGION"},
+	{"ack-controllers", "ack-system/ack-eks-eks-chart", "region", "controller", "AWS_REGION"},
 	// Karpenter needs this for the same reason but a different cause: the chart
 	// supplies no region, and under EKS Pod Identity nothing injects one, so
 	// without this it falls back to IMDS and panics. See the comment in
 	// src/karpenter/values/karpenter.yaml.
-	{"karpenter", "karpenter-controller", "region", "controller", "AWS_REGION"},
+	{"karpenter", "kube-system/karpenter", "region", "controller", "AWS_REGION"},
 }
 
 type resourceRef struct {
@@ -259,23 +258,25 @@ separate problems and only one of them needs the planes to see each other.`,
 	return c
 }
 
-// groupKey is component+unit. ConfigHub permits ONE Link per (from-unit,
-// to-unit) pair — the auto-generated slug derives from both names, so a second
-// link between the same pair collides. That is the right model rather than a
-// limitation: one Link carries many paths, so all of a Unit's bindings belong
+// groupKey is component+resource. Each resource is its own Unit, and
+// ConfigHub permits ONE Link per (from-unit, to-unit) pair — the auto-generated
+// slug derives from both names, so a second link between the same pair
+// collides. One Link carries many paths, so all of a resource's bindings belong
 // together.
-type groupKey struct{ component, unit string }
+type groupKey struct{ component, typ, resource string }
+
+const deploymentType = "apps/v1/Deployment"
 
 func groupBindings() ([]groupKey, map[groupKey][]binding) {
 	groups := map[groupKey][]binding{}
 	for _, b := range profileBindings {
-		k := groupKey{b.Component, b.Unit}
+		k := groupKey{b.Component, b.Type, b.Resource}
 		groups[k] = append(groups[k], b)
 	}
-	// Env bindings share the (component, unit) grouping — one Link per pair
-	// carries both paths and setters.
+	// Env bindings share the grouping — one Link per resource carries both
+	// paths and setters.
 	for _, e := range profileEnvBindings {
-		k := groupKey{e.Component, e.Unit}
+		k := groupKey{e.Component, deploymentType, e.Resource}
 		if _, ok := groups[k]; !ok {
 			groups[k] = nil
 		}
@@ -288,7 +289,10 @@ func groupBindings() ([]groupKey, map[groupKey][]binding) {
 		if keys[i].component != keys[j].component {
 			return keys[i].component < keys[j].component
 		}
-		return keys[i].unit < keys[j].unit
+		if keys[i].typ != keys[j].typ {
+			return keys[i].typ < keys[j].typ
+		}
+		return keys[i].resource < keys[j].resource
 	})
 	return keys, groups
 }
@@ -296,7 +300,7 @@ func groupBindings() ([]groupKey, map[groupKey][]binding) {
 func envBindingsFor(k groupKey) []envBinding {
 	var out []envBinding
 	for _, e := range profileEnvBindings {
-		if e.Component == k.component && e.Unit == k.unit {
+		if e.Component == k.component && k.typ == deploymentType && e.Resource == k.resource {
 			out = append(out, e)
 		}
 	}
@@ -350,6 +354,59 @@ func payloadFor(bs []binding, envs []envBinding) ([]byte, error) {
 		})
 	}
 	return json.Marshal(p)
+}
+
+// uploadIdentity is how cub records the resource a Unit was uploaded for, in
+// its UploadResource annotation: <group>/<Kind>/<namespace>/<name>, with no
+// version. typ is <group>/<version>/<Kind> (or <version>/<Kind> for the core
+// group) and resource is "namespace/name", or "/name" if cluster-scoped.
+func uploadIdentity(typ, resource string) string {
+	parts := strings.Split(typ, "/")
+	kind := parts[len(parts)-1]
+	group := ""
+	if len(parts) > 2 {
+		group = strings.Join(parts[:len(parts)-2], "/")
+	}
+	return group + "/" + kind + "/" + resource
+}
+
+// unitFor finds the Unit in a Space that holds one resource. cub uploads every
+// resource as its own Unit and records which in UploadResource, so the
+// resource, not the Unit's name, is what a binding relies on: names follow
+// cub's naming rule, which this plugin does not need to know.
+func (r *runner) unitFor(space, typ, resource string) (string, error) {
+	if r.unitsBySpace == nil {
+		r.unitsBySpace = map[string]map[string]string{}
+	}
+	units, ok := r.unitsBySpace[space]
+	if !ok {
+		out, err := r.cub("unit", "list", "--space", space, "-o", "json")
+		if err != nil {
+			return "", fmt.Errorf("listing units in %s: %w", space, err)
+		}
+		var items []struct {
+			Unit struct {
+				Slug        string            `json:"Slug"`
+				Annotations map[string]string `json:"Annotations"`
+			} `json:"Unit"`
+		}
+		if err := json.Unmarshal([]byte(out), &items); err != nil {
+			return "", fmt.Errorf("parsing units in %s: %w", space, err)
+		}
+		units = map[string]string{}
+		for _, it := range items {
+			if id := it.Unit.Annotations["UploadResource"]; id != "" {
+				units[id] = it.Unit.Slug
+			}
+		}
+		r.unitsBySpace[space] = units
+	}
+	id := uploadIdentity(typ, resource)
+	slug, ok := units[id]
+	if !ok {
+		return "", fmt.Errorf("no Unit in %s holds %s; if the component was installed by an earlier version of this plugin, reinstall it with: cub eksinf install --recreate", space, id)
+	}
+	return slug, nil
 }
 
 // unitID resolves a Unit's UUID, which is how Links address their endpoints.
@@ -439,6 +496,14 @@ func (r *runner) linkProfile(out interface{ Write([]byte) (int, error) }, profil
 		if err != nil {
 			return err
 		}
+		unit, err := r.unitFor(space, k.typ, k.resource)
+		if err != nil {
+			return err
+		}
+		profileUnit, err := r.unitFor(profileSpace, profileKind, profileResource)
+		if err != nil {
+			return err
+		}
 		// Create if absent, patch if present. --allow-exists is NOT sufficient
 		// here: it tolerates the existing Link without touching its paths, so a
 		// binding added to this table later would never reach a stack that had
@@ -446,7 +511,7 @@ func (r *runner) linkProfile(out interface{ Write([]byte) (int, error) }, profil
 		//
 		// `cub variant upload` used to have the same gap and now reconciles on
 		// re-upload; `cub link create` still only tolerates, so this stays.
-		existing, err := r.findLink(space, k.unit, profileSpace, profileUnit)
+		existing, err := r.findLink(space, unit, profileSpace, profileUnit)
 		if err != nil {
 			return err
 		}
@@ -458,16 +523,16 @@ func (r *runner) linkProfile(out interface{ Write([]byte) (int, error) }, profil
 		// is refused on UpgradeUnit and MergeUnits links; TransformPaths is
 		// what it exists for.
 		if existing == "" {
-			if _, err := r.cubStdin(body, "link", "create", "--space", space, "-", k.unit,
+			if _, err := r.cubStdin(body, "link", "create", "--space", space, "-", unit,
 				profileUnit, profileSpace, "--update-type", "TransformPaths",
 				"--auto-update", "--protect", "--from-stdin"); err != nil {
-				return fmt.Errorf("linking %s/%s: %w", space, k.unit, err)
+				return fmt.Errorf("linking %s/%s: %w", space, unit, err)
 			}
 		} else if _, err := r.cubStdin(body, "link", "update", existing,
 			"--space", space, "--patch", "--protect", "--from-stdin"); err != nil {
 			return fmt.Errorf("updating link %s in %s: %w", existing, space, err)
 		}
-		fmt.Fprintf(out, "  %s/%s: %d path(s), %d setter(s)\n", space, k.unit, len(groups[k]), len(envs))
+		fmt.Fprintf(out, "  %s/%s: %d path(s), %d setter(s)\n", space, unit, len(groups[k]), len(envs))
 		for _, b := range groups[k] {
 			fmt.Fprintf(out, "      %-14s -> %s\n", b.Field, b.Path)
 		}
@@ -478,8 +543,8 @@ func (r *runner) linkProfile(out interface{ Write([]byte) (int, error) }, profil
 		// created but never resolved leaves the placeholder in place and looks
 		// like it worked, which is the failure this whole mechanism exists to
 		// prevent.
-		if err := r.resolveUnit(space, k.unit); err != nil {
-			return fmt.Errorf("resolving %s/%s after linking: %w", space, k.unit, err)
+		if err := r.resolveUnit(space, unit); err != nil {
+			return fmt.Errorf("resolving %s/%s after linking: %w", space, unit, err)
 		}
 		links++
 		paths += len(groups[k]) + len(envs)
@@ -494,12 +559,12 @@ func (r *runner) listProfileLinks(out interface{ Write([]byte) (int, error) }, p
 	keys, groups := groupBindings()
 	for _, k := range keys {
 		for _, b := range groups[k] {
-			fmt.Fprintf(out, "  %-16s %-18s %-12s %-30s %s\n",
-				variantSpace(k.component, flagVariant), k.unit, b.Field, b.Resource, b.Path)
+			fmt.Fprintf(out, "  %-16s %-12s %-40s %s\n",
+				variantSpace(k.component, flagVariant), b.Field, b.Resource, b.Path)
 		}
 		for _, e := range envBindingsFor(k) {
-			fmt.Fprintf(out, "  %-16s %-18s %-12s %-30s set-env-var %s\n",
-				variantSpace(k.component, flagVariant), k.unit, e.Field, e.Container, e.EnvVar)
+			fmt.Fprintf(out, "  %-16s %-12s %-40s set-env-var %s %s\n",
+				variantSpace(k.component, flagVariant), e.Field, e.Resource, e.Container, e.EnvVar)
 		}
 	}
 	fmt.Fprintf(out, "\nExisting links to %s:\n", profileSpace)

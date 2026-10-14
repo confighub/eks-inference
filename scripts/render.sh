@@ -3,10 +3,9 @@
 #
 # Usage: scripts/render.sh <output-dir>
 #
-# One file per Unit: the bundles are installed with
-# `cub variant upload --granularity per-file`, so the file layout here IS the
-# Unit layout in ConfigHub. Renaming a file renames a Unit — treat these names
-# as an interface, not an implementation detail.
+# The bundles are installed with `cub variant upload`, which makes one Unit per
+# resource, named after the resource. Files group resources for reading; resource
+# names are the interface, since renaming a resource renames its Unit.
 #
 # NOTE ON HOOKS: we deliberately do NOT pass --no-hooks to `helm template`.
 # Hook resources render into the output where scripts/guard.sh can see and
@@ -88,9 +87,10 @@ render_ack_controller() {
 		--values "src/ack-controllers/values/${svc}.yaml" \
 		>"$tmp"
 
-	# CRDs land in their own Unit. They have a different lifecycle from the
-	# controller (never garbage collected, upgraded out of band) and ConfigHub's
-	# own `minimal` granularity splits them out for the same reason.
+	# CRDs go in a file of their own. They have a different lifecycle from the
+	# controller (never garbage collected, upgraded out of band), and
+	# share_ack_crds below needs them apart to find the ones every controller
+	# chart carries.
 	# No -N here: it suppresses the "---" separators, which silently concatenates
 	# every document into one unparseable blob. The split must preserve them.
 	yq 'select(.kind == "CustomResourceDefinition")' "$tmp" >"${dest}/${svc}-crds.yaml"
@@ -119,6 +119,37 @@ render_ack_controller() {
 	echo "  ${svc}: ${out_count} resources"
 
 	rm -f "$tmp"
+}
+
+# share_ack_crds moves the CRDs that every ACK chart ships, such as
+# fieldexports.services.k8s.aws, out of the per-controller files into one shared
+# file. Each resource becomes its own Unit, identified by the resource, so a
+# bundle that defines the same CRD twice is refused. The copies must be
+# identical; if two charts ever disagree, the render stops rather than choose.
+share_ack_crds() {
+	local dest="$1"
+	shift
+	local shared="${dest}/shared-crds.yaml" names name svc first="" copy
+	names="$(for svc in "$@"; do yq -N 'select(.kind == "CustomResourceDefinition") | .metadata.name' "${dest}/${svc}-crds.yaml"; done | sort | uniq -d)"
+	[[ -n "$names" ]] || return 0
+	: >"$shared"
+	for name in $names; do
+		first=""
+		for svc in "$@"; do
+			copy="$(yq "select(.metadata.name == \"${name}\")" "${dest}/${svc}-crds.yaml")"
+			[[ -z "$copy" ]] && continue
+			if [[ -z "$first" ]]; then
+				first="$copy"
+				[[ -s "$shared" ]] && echo "---" >>"$shared"
+				printf '%s\n' "$copy" >>"$shared"
+			elif [[ "$copy" != "$first" ]]; then
+				echo "ERROR: ${name} differs between the ACK charts; choose one by hand." >&2
+				exit 1
+			fi
+			yq -i "del(select(.metadata.name == \"${name}\"))" "${dest}/${svc}-crds.yaml"
+		done
+		echo "  shared: ${name}"
+	done
 }
 
 # The component set comes from components.yaml, not from a list kept here. A
@@ -151,6 +182,7 @@ for component in "${COMPONENTS[@]}"; do
 		render_ack_controller iam "${ACK_IAM_CHART_VERSION}" "${out}/${component}"
 		render_ack_controller ec2 "${ACK_EC2_CHART_VERSION}" "${out}/${component}"
 		render_ack_controller eks "${ACK_EKS_CHART_VERSION}" "${out}/${component}"
+		share_ack_crds "${out}/${component}" iam ec2 eks
 		;;
 	copy)
 		# Handwritten ACK custom resources and plain manifests — no chart to

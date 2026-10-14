@@ -5,13 +5,13 @@ main way this stack goes wrong.
 
 ## 0. Where the Unit boundaries go
 
-Before any of that: with `--granularity per-file`, **file boundaries become Unit
-boundaries, and Unit boundaries become nodes in ConfigHub's inferred link
-graph.** Grouping is therefore a modelling decision, not a filing convenience —
-splitting resources across files can invent dependencies that do not exist
-between the resources themselves.
+Install uploads one Unit per resource, named after the resource. How resources
+are grouped into files in `configs/` decides nothing in ConfigHub, so the inferred
+link graph has the same shape as the references between the resources
+themselves.
 
-`aws-network` was originally seven files. Upload reported:
+That was not always so. When each file was one Unit, `aws-network` was
+originally seven files, and upload reported:
 
 ```
 broke reference link gateways -> subnets-public to resolve cycle:
@@ -20,20 +20,12 @@ broke reference link gateways -> subnets-public to resolve cycle:
 
 There is no cycle among the actual resources — `NATGateway → public-a →
 public-rt → igw → vpc` is a clean chain. The cycle existed only because the two
-route tables shared a file and the two gateways shared a file. ConfigHub broke
-the weakest edge, as documented, leaving the graph quietly wrong.
+route tables shared a file and the two gateways shared a file. One Unit per
+resource cannot produce that kind of cycle.
 
-The rule that came out of it: **a Unit should be the smallest thing you would
-independently version, review, or roll back.** Nobody rolls back "just the route
-tables", so the VPC and everything in it is one Unit. By contrast
-`ack-controllers` keeps CRDs separate from controllers (genuinely different
-upgrade lifecycles) and `eks-cluster` keeps `nodegroup` separate from `cluster`
-(scaling changes far more often than the control plane version).
-
-Merging costs nothing operationally: `argocd.argoproj.io/sync-wave` is a
-per-resource annotation, so ordering survives regardless of grouping, and
-bindings address resources by `ResourceType` + `ResourceName` *within* a Unit,
-so fine-grained links still work.
+Ordering does not depend on Units either: `argocd.argoproj.io/sync-wave` is a
+per-resource annotation, and bindings address resources by `ResourceType` +
+`ResourceName` within a Unit.
 
 ## 1. ACK refs — runtime, for AWS IDs
 

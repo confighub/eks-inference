@@ -1,27 +1,10 @@
-# The VPC and everything in it, as one Unit.
-#
-# WHY ONE FILE: with --granularity per-file, file boundaries become Unit
-# boundaries, and Unit boundaries become edges in ConfigHub's inferred link
-# graph. Splitting these resources across files does not just add Units — it
-# invents dependencies between them.
-#
-# Concretely: an earlier split of gateways.yaml + route-tables.yaml + subnets-*
-# produced a cycle that ConfigHub had to break an edge to resolve:
-#
-#   gateways -> subnets-public -> route-tables -> gateways
-#
-# No such cycle exists between the actual resources. NATGateway -> public-a ->
-# public-rt -> igw -> vpc is a clean chain. The cycle was purely an artifact of
-# which resources shared a file.
-#
-# These resources are also created, versioned, and destroyed together — nobody
-# rolls back "just the route tables" — so one Unit is an honest description of
-# their lifecycle rather than a convenience.
+# The VPC and everything in it, in one file. Install uploads one Unit per
+# resource, so the file is for reading: these resources are created, versioned
+# and destroyed together. See docs/dependencies.md.
 #
 # ORDERING IS NOT LOST: argocd.argoproj.io/sync-wave is a per-resource
-# annotation, so Argo still applies these in the order below regardless of how
-# they are grouped into Units. Resources appear here in topological order and
-# their waves match.
+# annotation, so Argo applies these in the order below whatever Units hold
+# them. Resources appear here in topological order and their waves match.
 #
 # AVAILABILITY ZONES ARE PLACEHOLDERS. An AZ string encodes its region, so
 # hardcoding them here while the ACK controllers take their region from the
