@@ -4,9 +4,11 @@ import "testing"
 
 func TestUploadSummary(t *testing.T) {
 	cases := map[string]string{
-		"Pulled oci://x (sha256:abc)\nAlready up to date: karpenter-base matches the input\n": unchangedSummary,
-		"== Space upl2-base ==\nRe-uploaded upl2-base: 1 created, 1 updated, 0 emptied\n":     "1 created, 1 updated, 0 emptied",
-		"Successfully created unit nodepools (abc)\n":                                         "",
+		"Pulled oci://x (sha256:abc)\nAlready up to date: karpenter-base matches the input\n":                                    unchangedSummary,
+		"== Space upl2-base ==\nRe-uploaded upl2-base: 1 created, 1 updated, 0 emptied\n":                                        "1 created, 1 updated, 0 emptied",
+		"Successfully created unit nodepools (abc)\n":                                                                            "",
+		"Space karpenter-base (Update)\n  Update    general-ec2nodeclass\n  Create    gpu-ec2nodeclass\n  Unchanged 3 Unit(s)\n": "1 created, 1 updated, 0 emptied",
+		"Space karpenter-base (Update)\n  Unchanged 5 Unit(s)\n":                                                                 unchangedSummary,
 		"": "",
 		// A wording change upstream must degrade to "", not to a wrong summary.
 		"Reuploaded upl2-base -- 1 changed\n": "",
@@ -25,6 +27,10 @@ Revert with: cub unit update --patch --space upl2-base --restore Before:ChangeSe
 	want := `cub unit update --patch --space upl2-base --restore Before:ChangeSet:reconcile-1 --where "Slug IN ('nodepools')"`
 	if got := revertCommand(out); got != want {
 		t.Errorf("revertCommand = %q, want %q", got, want)
+	}
+	current := "Space platform-profile-base (Update)\n  Update    inference-demo-platformprofile\n\nRevert this upload of platform-profile-base with:\n  cub unit update --patch --space platform-profile-base --restore Before:ChangeSet:upload-1 --where \"Labels.UploadSource = 'platform-profile'\"\n"
+	if got, want := revertCommand(current), `cub unit update --patch --space platform-profile-base --restore Before:ChangeSet:upload-1 --where "Labels.UploadSource = 'platform-profile'"`; got != want {
+		t.Errorf("revertCommand(current) = %q, want %q", got, want)
 	}
 	if got := revertCommand("nothing here"); got != "" {
 		t.Errorf("revertCommand with no revert line = %q, want empty", got)
@@ -59,8 +65,8 @@ func TestParseCubVersion(t *testing.T) {
 
 func TestCompareVersions(t *testing.T) {
 	min := mustParseVersion(minCubVersion)
-	older := [][]int{{0, 3, 2}, {0, 2, 14}, {0, 1, 99}, {0, 0, 0}}
-	newer := [][]int{{0, 4, 0}, {0, 4, 1}, {0, 5, 0}, {1, 0, 0}}
+	older := [][]int{{0, 4, 16}, {0, 4, 0}, {0, 3, 2}, {0, 0, 0}}
+	newer := [][]int{{0, 4, 17}, {0, 5, 0}, {0, 8, 17}, {1, 0, 0}}
 	for _, v := range older {
 		if compareVersions(v, min) >= 0 {
 			t.Errorf("%v should be older than %s", v, minCubVersion)
@@ -69,6 +75,20 @@ func TestCompareVersions(t *testing.T) {
 	for _, v := range newer {
 		if compareVersions(v, min) < 0 {
 			t.Errorf("%v should be at least %s", v, minCubVersion)
+		}
+	}
+}
+
+func TestUploadIdentity(t *testing.T) {
+	cases := map[[2]string]string{
+		{"ec2.services.k8s.aws/v1alpha1/Subnet", "aws-inference/inference-demo-private-a"}: "ec2.services.k8s.aws/Subnet/aws-inference/inference-demo-private-a",
+		{"eks-inference.confighub.com/v1/PlatformProfile", "/inference-demo"}:              "eks-inference.confighub.com/PlatformProfile//inference-demo",
+		{"apps/v1/Deployment", "kube-system/karpenter"}:                                    "apps/Deployment/kube-system/karpenter",
+		{"v1/Namespace", "/aws-inference"}:                                                 "/Namespace//aws-inference",
+	}
+	for in, want := range cases {
+		if got := uploadIdentity(in[0], in[1]); got != want {
+			t.Errorf("uploadIdentity(%q, %q) = %q, want %q", in[0], in[1], got, want)
 		}
 	}
 }

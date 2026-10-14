@@ -176,7 +176,7 @@ func (r *runner) sandboxUp(out io.Writer, name string) error {
 	fmt.Fprintln(out, "The config is real. Things worth trying:")
 	fmt.Fprintf(out, "  cub unit list --space %s\n", variantSpace("karpenter", flagVariant))
 	fmt.Fprintf(out, "  cub eksinf link-profile --list                      # what the profile drives\n")
-	fmt.Fprintf(out, "  cub unit edit --space %s nodepools   # then: cub release publish\n",
+	fmt.Fprintf(out, "  cub unit edit --space %s general-nodepool   # then: cub release publish\n",
 		variantSpace("karpenter", flagVariant))
 	fmt.Fprintf(out, "  cub eksinf sandbox down --name %s\n", name)
 	return nil

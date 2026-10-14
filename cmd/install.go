@@ -38,18 +38,20 @@ Target and are never deployed; use 'eksinf deploy' for that.
 Run it again whenever the bundles are republished. A re-upload 3-way merges the
 new bundle against the last one, so Unit IDs, target bindings and upstream links
 survive, and anything changed in ConfigHub after the upload survives with them.
-A bundle that has not moved is a no-op. Needs cub v0.4.0 or newer: that is the
-API version this plugin speaks, and cub itself refuses a server on another one.
+A bundle that has not moved is a no-op. Needs cub v0.4.17 or newer: from that
+release an upload goes through the server and makes one Unit per resource,
+which is what this plugin's links rely on.
 
---prune additionally EMPTIES Units the bundle no longer produces. Off by default,
-because emptying a base Unit propagates to every downstream that promotes from it
-— which is right when a resource was genuinely dropped upstream, and wrong when
-you are installing a partial bundle by mistake. Nothing is ever deleted either
-way: the Unit record, its ID and its bindings survive being emptied.
+--prune lets an upload EMPTY Units whose resources the bundle no longer
+contains. Without it such an upload stops and says so, because emptying a base
+Unit propagates to every downstream that promotes from it, which is right when
+a resource was genuinely dropped upstream and wrong when you are installing a
+partial bundle by mistake. Nothing is ever deleted either way: the Unit record,
+its ID and its bindings survive being emptied.
 
---recreate DELETES each base and uploads it again. It is only for changing
-granularity, which changes which Units exist and so cannot preserve links no
-matter how it is done. For every other case a plain re-upload is correct and
+--recreate DELETES each base and uploads it again. It is for bases installed by
+a plugin release before 0.13, which made one Unit per file: their Units are not
+the ones the links now look for, and that cannot be changed in place. For every other case a plain re-upload is correct and
 non-destructive.
 
 Downstream variants are NOT touched. After updating a base, promote it:
@@ -84,11 +86,11 @@ Downstream variants are NOT touched. After updating a base, promote it:
 					return fmt.Errorf("checking Space %s: %w", base, err)
 				}
 
-				// --recreate is for a granularity change and nothing else. It
-				// destroys and rebuilds, which is the honest expression of that
-				// operation: the Unit set itself changes, so links to the old
-				// Units cannot survive by any means. Everything else goes
-				// through the plain re-upload below.
+				// --recreate is for bases uploaded one Unit per file, before
+				// 0.13, and nothing else. It destroys and rebuilds because the
+				// Unit set itself changes, so links to the old Units cannot
+				// survive by any means. Everything else goes through the plain
+				// re-upload below.
 				if recreate && has {
 					downstreams, err := r.variantsOf(comp.Name)
 					if err != nil {
@@ -120,17 +122,20 @@ Downstream variants are NOT touched. After updating a base, promote it:
 				// here, and no create-if-absent race to lose.
 				args := []string{"variant", "upload",
 					"--component", comp.Name, "--variant", "base",
-					"--granularity", baseGranularity,
 					"--owner", stackOwner,
-					"--label", "managed-by=eks-inference"}
+					"--space-label", "managed-by=eks-inference"}
 				if dryRun {
 					args = append(args, "--dry-run")
 				}
 				if prune {
-					args = append(args, "--prune")
+					// cub asks before emptying a Unit; --prune is the answer.
+					args = append(args, "--yes")
 				}
 				uploadOut, err := r.cub(append(args, ref)...)
 				if err != nil {
+					if strings.Contains(err.Error(), "confirmation") || strings.Contains(err.Error(), "refusing to empty") {
+						return fmt.Errorf("uploading %s from %s: the bundle no longer contains some resources this base has; to empty their Units, run again with --prune: %w", comp.Name, ref, err)
+					}
 					return fmt.Errorf("uploading %s from %s: %w", comp.Name, ref, err)
 				}
 
@@ -170,9 +175,9 @@ Downstream variants are NOT touched. After updating a base, promote it:
 	c.Flags().StringVar(&registry, "registry", defaultRegistry, "OCI registry holding the component bundles")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "report what would happen, change nothing")
 	c.Flags().BoolVar(&prune, "prune", false,
-		"also empty Units the bundle no longer produces")
+		"let the upload empty Units whose resources the bundle no longer contains")
 	c.Flags().BoolVar(&recreate, "recreate", false,
-		"delete and rebuild each base; only needed to change granularity")
+		"delete and rebuild each base; needed once for bases installed before 0.13")
 	return c
 }
 
@@ -209,14 +214,6 @@ func (r *runner) variantsOf(component string) ([]string, error) {
 	return found, nil
 }
 
-// baseGranularity is the Unit model for every base Space.
-//
-// per-file makes each file in the bundle one Unit, so file names in configs/
-// are an interface. cub now refuses a re-upload at a different granularity —
-// which is the right answer, since changing it changes which Units exist and
-// therefore breaks every link and target binding pointing at the old ones.
-const baseGranularity = "per-file"
-
 // unchangedSummary is what uploadSummary returns for a bundle that has not moved.
 const unchangedSummary = "already up to date"
 
@@ -227,8 +224,21 @@ const unchangedSummary = "already up to date"
 // depends on the wording being stable. The alternative — asking ConfigHub what
 // changed — costs an extra round trip per component to phrase a status line.
 func uploadSummary(out string) string {
+	created, updated, emptied, listed := 0, 0, 0, false
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
+		// cub v0.4.17 and newer print one line per Unit under a "Space X
+		// (Create|Update)" heading, and "Unchanged N Unit(s)" for the rest.
+		switch first, _, _ := strings.Cut(line, " "); first {
+		case "Create":
+			created, listed = created+1, true
+		case "Update":
+			updated, listed = updated+1, true
+		case "Empty":
+			emptied, listed = emptied+1, true
+		case "Unchanged":
+			listed = true
+		}
 		switch {
 		case strings.HasPrefix(line, "Already up to date"):
 			return unchangedSummary
@@ -239,7 +249,13 @@ func uploadSummary(out string) string {
 			}
 		}
 	}
-	return ""
+	switch {
+	case !listed:
+		return ""
+	case created+updated+emptied == 0:
+		return unchangedSummary
+	}
+	return fmt.Sprintf("%d created, %d updated, %d emptied", created, updated, emptied)
 }
 
 // revertCommand extracts the rollback command cub prints for a re-upload.
@@ -248,9 +264,16 @@ func uploadSummary(out string) string {
 // from a bad bundle, and it is scoped to the exact ChangeSet the upload made.
 func revertCommand(out string) string {
 	const prefix = "Revert with: "
-	for _, line := range strings.Split(out, "\n") {
-		if line = strings.TrimSpace(line); strings.HasPrefix(line, prefix) {
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
 			return strings.TrimPrefix(line, prefix)
+		}
+		// cub v0.4.17 and newer: "Revert this upload of <space> with:" and the
+		// command on the next line.
+		if strings.HasPrefix(line, "Revert this upload of ") && strings.HasSuffix(line, " with:") && i+1 < len(lines) {
+			return strings.TrimSpace(lines[i+1])
 		}
 	}
 	return ""
@@ -270,7 +293,7 @@ func revertCommand(out string) string {
 //
 // The plugin installs from GitHub releases and upgrades independently of cub,
 // so the skew is ordinary rather than exotic.
-const minCubVersion = "v0.4.0"
+const minCubVersion = "v0.4.17"
 
 // requireCubVersion fails when the cub on PATH is older than min.
 //
@@ -289,10 +312,10 @@ func (r *runner) requireCubVersion(min string) error {
 	}
 	if compareVersions(got, mustParseVersion(min)) < 0 {
 		return fmt.Errorf(
-			"this needs cub %s or newer for re-upload; found %v.%v.%v.\n"+
-				"Older versions cannot upload into a Space that already has Units and fail\n"+
-				"with \"already exists\". Upgrade cub, or use --recreate to rebuild the bases.",
-			min, got[0], got[1], got[2])
+			"this needs cub %s or newer; found %v.%v.%v.\n"+
+				"From %s an upload makes one Unit per resource, which the links this plugin\n"+
+				"creates rely on. Upgrade cub: cub upgrade",
+			min, got[0], got[1], got[2], min)
 	}
 	return nil
 }

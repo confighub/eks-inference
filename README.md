@@ -361,13 +361,14 @@ scripts/render.sh         helm template + copy -> configs/
 scripts/guard.sh          rejects Helm constructs that do not survive flattening
 scripts/bundle.sh         reproducible tarballs + oras push
 src/                      sources: chart values and handwritten ACK resources
-configs/                  rendered output (committed; one file per ConfigHub Unit)
+configs/                  rendered output (committed; uploaded as one Unit per resource)
 iam/                      the IAM policy `creds create-user` attaches
 ```
 
-File names in `configs/` are an interface: bundles install with
-`--granularity per-file`, so each file becomes one Unit and renaming a file
-renames a Unit.
+Install uploads one Unit per resource, named after the resource, so file names
+in `configs/` are free to change. Resource names are the interface: renaming a
+resource renames its Unit, and the links `link-profile` makes find their Unit by
+the resource it holds.
 
 ### Taking a newer bundle
 
@@ -390,7 +391,8 @@ cub release publish <component>-dev
 ```
 
 `--prune` additionally empties Units the bundle no longer produces; `--recreate`
-deletes and rebuilds, which is only needed to change granularity. See
+deletes and rebuilds, which is needed once for bases installed before 0.13, when
+each file was one Unit. See
 [docs/install.md](./docs/install.md#taking-a-newer-bundle).
 
 ### Versioning the plugin

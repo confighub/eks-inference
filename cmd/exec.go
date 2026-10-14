@@ -24,6 +24,8 @@ import (
 
 type runner struct {
 	env []string
+	// unitsBySpace caches, per Space, the Unit that holds each resource; see unitFor.
+	unitsBySpace map[string]map[string]string
 }
 
 func newRunner() *runner { return &runner{env: os.Environ()} }

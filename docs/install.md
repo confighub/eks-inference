@@ -31,13 +31,13 @@ which is, per component:
 ```bash
 cub variant upload \
   --component aws-network --variant base \
-  --granularity per-file \
+  --owner "EKS Inference" --space-label managed-by=eks-inference \
   oci://ghcr.io/confighub/configs/eks-inference/aws-network
 ```
 
 This creates a Space named `<component>-base` (from the default space pattern
-`{{.Labels.Component}}-{{.Labels.Variant}}`), with one Unit per file in the
-bundle. The bundle's resolved digest is recorded on the Space as a
+`{{.Labels.Component}}-{{.Labels.Variant}}`), with one Unit per resource in the
+bundle, named after the resource. The bundle's resolved digest is recorded on the Space as a
 `confighub.com/external-source` annotation, so the exact bytes installed are
 auditable and the upload can be reproduced.
 
@@ -208,16 +208,11 @@ a decision rather than a default.
 Deletes each base Space and uploads it again, and refuses while any downstream
 variant still points at it.
 
-It exists for exactly one case: **changing granularity.** Granularity determines
-which Units exist, so changing it cannot preserve links by any mechanism — the
-Units the links point at stop existing. Deleting and rebuilding is the honest
-expression of that, not a workaround for a missing feature. cub itself refuses a
-re-upload at a different granularity than the Space was created with:
-
-```
-Failed: Space "karpenter-base" was uploaded with --granularity per-file,
-but this upload specifies minimal.
-```
+It exists for exactly one case: **bases installed before 0.13.** Those were
+uploaded one Unit per file; cub now uploads one Unit per resource, so the Units
+the old links point at do not exist in the new layout and cannot be carried
+over. Deleting and rebuilding is the honest expression of that. Until you do,
+`link-profile` stops with a message naming `--recreate`.
 
 For every other case — a chart bump, a bug fix, a new resource — a plain
 re-upload is correct and non-destructive.
