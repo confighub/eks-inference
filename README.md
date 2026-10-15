@@ -18,8 +18,8 @@ cub eksinf --help
 ```
 
 The plugin is the admin tool for this stack. You do not need this repo checked
-out to use it. Needs **cub v0.4.0 or newer** — pre-1.0 the second version number
-is the API version, and v0.4 is the API this plugin speaks.
+out to use it. The plugin needs **cub v0.4.17 or newer**, and attaching the EKS
+cluster in Path B needs **v0.8.22 or newer**, the first with `cub cluster attach`.
 
 ## First, the component bases
 
