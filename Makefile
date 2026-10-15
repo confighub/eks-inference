@@ -5,7 +5,7 @@
 # Everything a consumer does lives in the cub plugin:
 #
 #   cub plugin install confighub/eks-inference
-#   cub eksinf install | deploy | enroll | creds | link-profile | status
+#   cub eksinf install | deploy | creds | link-profile | status
 #
 # What remains here needs the source tree, helm, and GNU tar, and only ever runs
 # here or in CI:

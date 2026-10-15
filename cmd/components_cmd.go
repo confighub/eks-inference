@@ -23,7 +23,7 @@ applies them before they are separated by anything else:
 
   hub       lives only in ConfigHub; never bound to a Target, never applied
   mgmt      applied by the local kind cluster; creates AWS infrastructure via ACK
-  workload  applied by the EKS cluster once enrolled
+  workload  applied by the EKS cluster once attached
 
 Order is meaningful within a plane. Between planes it is not expressible in
 config at all — the mgmt plane must converge before the workload plane is

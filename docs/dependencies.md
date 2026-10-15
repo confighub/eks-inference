@@ -283,8 +283,9 @@ safe; the waves just reduce noise.
 
 Placeholders are only safe if forgetting to fill them is *caught*. Since cub
 v0.2.10, `cub cluster up` attaches a `vet-placeholders` Trigger to the OCI Target
-it creates, and `eksinf enroll` does the same for clusters it enrolls. Publishing
-a Release that still contains one is refused:
+it creates, and `cub cluster attach` does the same for clusters it attaches, as
+does `eksinf sandbox up` for its cluster-less Targets. Publishing a Release that
+still contains one is refused:
 
 ```
 Failed: HTTP 422: outstanding ApplyGates; triggers re-queued for evaluation
@@ -302,7 +303,7 @@ just more Triggers there followed by:
 cub target update --space <cluster> target --refresh-triggers
 ```
 
-Pass `--no-placeholder-gate` to `eksinf enroll` (or `cub cluster up`) to opt out.
+Pass `--no-placeholder-gate` to `cub cluster attach` (or `cub cluster up`) to opt out.
 
 Clusters created before v0.2.10 do not have the gate. To add it:
 

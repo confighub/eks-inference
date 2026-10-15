@@ -279,9 +279,8 @@ func revertCommand(out string) string {
 	return ""
 }
 
-// minCubVersion is a HARD FLOOR for install, for the same reason the Argo CD
-// version is one for enroll: below it the command cannot work, and the way it
-// fails does not say so.
+// minCubVersion is a HARD FLOOR for install: below it the command cannot work,
+// and the way it fails does not say so.
 //
 // Pre-1.0 the second version number is the API version, so the floor names an
 // API rather than a feature: every command below is spelled the way v0.4 spells

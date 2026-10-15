@@ -9,16 +9,16 @@ release without a cluster at all — see the README.
 ## 1. A management cluster
 
 ```bash
-cub cluster up --name inference-mgmt
+cub cluster up inference-mgmt
 ```
 
 This creates a kind cluster with Argo CD installed, plus two ConfigHub spaces:
-`inference-mgmt` (holding a server-hosted OCI worker and an OCI target) and
+`inference-mgmt` (holding the cluster's OCI target and argobot's Channel) and
 `inference-mgmt-argo-apps` (the root "app of apps" Application and every child
-Application Unit).
+Application Unit), and a service account `argo-inference-mgmt` that Argo CD
+pulls as and argobot runs as.
 
-Argo pulls config from ConfigHub's OCI registry — there is no worker pod in the
-cluster.
+Argo pulls config from ConfigHub's OCI registry — no worker runs anywhere.
 
 ## 2. Install the bundles as component bases
 
@@ -123,9 +123,15 @@ cub release publish aws-network-dev   # what deploy does per component
 > requeues rather than fails permanently — so the stack reaches the right state
 > regardless. It is just noisy on the way there.
 
-### Enrolling the EKS cluster
+### Attaching the EKS cluster
 
-`cub eksinf enroll cluster --name … --eks-cluster … --region … --grant-access`
+`cub cluster attach <name> --provider eks --aws-region … --aws-profile … --grant-access`
+
+This is plain cub rather than the plugin: attaching a cluster to ConfigHub is
+the same whether it is EKS or anything else, and `cub cluster attach --help`
+documents it. The EKS cluster name defaults to the name given; pass `--cluster`
+when they differ. The kubeconfig it keeps authenticates through the AWS CLI, so
+it stays good as long as your AWS credentials are.
 
 `--grant-access` matters whenever the ACK controllers hold a different AWS
 identity from yours, which is exactly what `creds create-user` arranges. EKS
@@ -133,7 +139,7 @@ grants bootstrap admin to the principal that CREATED the cluster — the ACK use
 so your own identity has no access entry and the API server rejects you with a
 bare 401 that says nothing about access entries. The flag adds a STANDARD entry
 with `AmazonEKSClusterAdminPolicy` and waits for it to take effect, which is not
-instant. Without it, `enroll` now names the missing principal and prints the two
+instant. Without it, attach names the missing principal and prints the two
 `aws` commands rather than failing opaquely.
 
 ## 6. Watch it converge
@@ -226,14 +232,14 @@ empty — abandoning a stack rather than updating one:
 # 1. AWS, then this stack's variant Spaces (8 components + the profile).
 cub eksinf teardown --yes --delete-config
 
-# 2. The enrolled EKS cluster's wiring, including its argobot Space. None of
-#    these are covered by teardown, which only knows about component variants.
-#    argobot's Space goes first: its release target points at the cluster's
-#    target, and that reference blocks deleting the cluster Space.
-cub eksinf enroll remove --name inference-demo --delete-spaces --yes
+# 2. The attached EKS cluster's wiring, including its argobot Space and its
+#    service account. None of these are covered by teardown, which only knows
+#    about component variants. (If teardown has already deleted the EKS
+#    cluster, detach skips the in-cluster cleanup and still removes the config.)
+cub cluster detach inference-demo --delete-config
 
-# 3. The management cluster, its Spaces, and argobot's.
-cub cluster down --name inference-mgmt --delete-config
+# 3. The management cluster, its Spaces, argobot's, and its service account.
+cub cluster down inference-mgmt --delete-config
 
 # 4. Bases, if you want those gone too.
 cub space delete <component>-base --recursive
