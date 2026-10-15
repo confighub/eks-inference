@@ -279,8 +279,8 @@ func (r *runner) enablePrune(out io.Writer, target string, deployed map[string]b
 }
 
 // appsSpaceFor resolves the Space holding a target's Argo Applications, from the
-// confighub.com/argo-apps-space annotation `cub cluster up` and `eksinf enroll`
-// stamp on the OCI target. Returns "" when the target carries no annotation.
+// confighub.com/argo-apps-space annotation `cub cluster up` and `cub cluster
+// attach` stamp on the OCI target. Returns "" when the target carries no annotation.
 func (r *runner) appsSpaceFor(target string) (string, error) {
 	space, name, ok := strings.Cut(target, "/")
 	if !ok || space == "" || name == "" {

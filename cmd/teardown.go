@@ -540,8 +540,8 @@ func (r *runner) requireControllerCredentials(w io.Writer) error {
 //
 // The two identities are deliberately NOT collapsed into one. They do different
 // jobs: `creds create-user` mints the scoped IAM user before that Secret exists,
-// and `enroll --grant-access` grants cluster-admin to the CALLER — using the
-// controllers' identity there would hand access to the wrong principal. Both
+// and `cub cluster attach --grant-access` grants cluster-admin to the CALLER —
+// using the controllers' identity there would hand access to the wrong principal. Both
 // identities are legitimate; only their silently disagreeing is not.
 func (r *runner) requireMatchingAccount(kc string, w io.Writer) error {
 	ackAccount := r.controllerAccount(kc)

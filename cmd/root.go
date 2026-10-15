@@ -26,7 +26,7 @@ managed as data in ConfigHub.
 
 The stack spans two apply planes. The mgmt plane runs on the kind cluster and
 creates AWS infrastructure; the workload plane runs on the EKS cluster once it is
-enrolled. Nothing moves between them.
+attached with "cub cluster attach". Nothing moves between them.
 
 Build-time operations (render, guard, bundle) are deliberately absent: they need
 the source tree, helm, and GNU tar, and only ever run in the eks-inference repo
@@ -45,7 +45,6 @@ or its CI. This tool covers what a consumer of the stack does.`,
 		newStatusCmd(),
 		newDeployCmd(),
 		newLinkProfileCmd(),
-		newEnrollCmd(),
 		newSandboxCmd(),
 		newCredsCmd(),
 		newTeardownCmd(),

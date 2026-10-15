@@ -18,8 +18,8 @@ import (
 // pure ConfigHub — see deployPlane. Even the credentials check degrades to a
 // no-op when there is no reachable cluster, deliberately. The one thing `deploy`
 // needs from the outside world is a Target to bind variants to, and a Target is
-// itself just a ConfigHub entity: a Space, a server-hosted worker, and an OCI
-// target, which enrollConfigHubSide already creates without touching a cluster.
+// itself just a ConfigHub entity: a Space and a Target in it, which
+// sandboxTargetSpace creates without touching a cluster.
 //
 // So this command is mostly assembly, not new machinery. That is the point it
 // demonstrates: the stack is defined by its data, and the data can exist with
@@ -38,7 +38,8 @@ const (
 
 // sandboxMgmt and sandboxWorkload name the two Spaces that stand in for the two
 // clusters. They hold a Target each and nothing else — the same shape
-// `cub cluster up` and `eksinf enroll` produce, minus the cluster.
+// `cub cluster up` and `cub cluster attach` produce, minus the cluster and the
+// identity that pulls for it.
 func sandboxMgmt(name string) string     { return name + "-mgmt" }
 func sandboxWorkload(name string) string { return name + "-workload" }
 
@@ -140,14 +141,12 @@ func (r *runner) sandboxUp(out io.Writer, name string) error {
 		}
 	}
 
-	// 2. Two Spaces holding a Target each, standing in for the two clusters.
-	// enrollConfigHubSide creates exactly this and touches no cluster: a Space,
-	// a server-hosted OCI worker, an OCI target carrying the argo-apps-space
-	// annotation, and the vet-placeholders Trigger on that target.
+	// 2. Two Spaces holding a Target each, standing in for the two clusters:
+	// what `cub cluster attach` creates on the ConfigHub side, minus the
+	// service account, since nothing will ever pull from these.
 	for _, s := range []string{mgmt, workload} {
 		fmt.Fprintf(out, "\n==> target Space %s (no cluster behind it)\n", s)
-		o := &enrollOpts{name: s}
-		if err := r.enrollConfigHubSide(o, out); err != nil {
+		if err := r.sandboxTargetSpace(s, out); err != nil {
 			return err
 		}
 		// Mark it, so a human reading `cub space list` can tell at a glance that
@@ -214,6 +213,38 @@ func newSandboxDownCmd() *cobra.Command {
 	c.Flags().StringVar(&name, "name", sandboxDefaultName, "prefix used at 'sandbox up' time")
 	c.Flags().BoolVar(&yes, "yes", false, "proceed without confirmation")
 	return c
+}
+
+// sandboxTargetSpace creates a cluster Space with a Target, gated on
+// placeholders, and its apps Space releasing to that Target, in the shape
+// `cub cluster attach` produces (see "cub cluster attach --help"). The Target
+// carries the argo-apps-space annotation so `cub variant create --target`, and
+// so `eksinf deploy`, adds an Argo Application Unit per variant exactly as it
+// would for a real cluster. No service account is created: there is no cluster
+// to pull as one, and every other command here runs as the user.
+func (r *runner) sandboxTargetSpace(name string, w io.Writer) error {
+	appsSpace := name + "-argo-apps"
+	if _, err := r.cub("space", "create", name, "--label", "Owner="+stackOwner, "--allow-exists"); err != nil {
+		return fmt.Errorf("creating Space %s: %w", name, err)
+	}
+	if _, err := r.cub("target", "create", "target", "--space", name,
+		"--annotation", "confighub.com/argo-apps-space="+appsSpace,
+		"--allow-exists"); err != nil {
+		return fmt.Errorf("creating target in %s: %w", name, err)
+	}
+	fmt.Fprintf(w, "  space %s: target\n", name)
+
+	if _, err := r.cub("space", "create", appsSpace, "--label", "Owner="+stackOwner, "--allow-exists"); err != nil {
+		return fmt.Errorf("creating Space %s: %w", appsSpace, err)
+	}
+	// Cross-space release target: the apps Space's bundle is served by the
+	// Target in the cluster Space, so neither Space releases into itself.
+	if _, err := r.cub("space", "update", appsSpace, "--patch",
+		"--release-target", name+"/target"); err != nil {
+		return fmt.Errorf("setting release target on %s: %w", appsSpace, err)
+	}
+	fmt.Fprintf(w, "  space %s: release target %s/target\n", appsSpace, name)
+	return r.ensurePlaceholderGate(name, "target", w)
 }
 
 // sandboxDeleteOrder returns the Spaces to delete, in an order that satisfies

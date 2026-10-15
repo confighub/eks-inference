@@ -17,7 +17,7 @@ const (
 	// PlaneMgmt components are applied by the local kind cluster and create AWS
 	// infrastructure through ACK.
 	PlaneMgmt Plane = "mgmt"
-	// PlaneWorkload components are applied by the EKS cluster once enrolled.
+	// PlaneWorkload components are applied by the EKS cluster once attached.
 	PlaneWorkload Plane = "workload"
 )
 

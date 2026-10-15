@@ -61,7 +61,7 @@ not before `install`, so arriving here from Path A costs you nothing.
 
 ```bash
 # 1. A local management cluster, wired to ConfigHub via Argo CD.
-cub cluster up --name inference-mgmt
+cub cluster up inference-mgmt
 
 # 2. The parameter surface. Its Space has no Target and is never deployed.
 #    Skip if you already have platform-profile-dev.
@@ -90,22 +90,30 @@ When the EKS cluster is `ACTIVE`, bring it under management and deploy the
 workload plane onto it:
 
 ```bash
-# 6. Enroll EKS: install Argo CD, register a worker and OCI target, bootstrap
-#    the root app-of-apps, and install argobot. Never creates or destroys a
-#    cluster.
+# 6. Attach EKS to ConfigHub: install Argo CD, create the cluster's service
+#    account and OCI target, bootstrap the root app-of-apps, and install
+#    argobot. This is plain cub, not the plugin; it never creates or destroys
+#    a cluster, and "cub cluster attach --help" has the full story.
+#
+#    --provider eks resolves the cluster through the AWS CLI; the EKS cluster
+#    name defaults to the name given here. --grant-access is needed after
+#    step 3's create-user path: ACK built the cluster as its own identity, so
+#    EKS trusts THAT principal and not yours, and the API server rejects you
+#    outright. It adds an access entry for your identity. Omit it if you
+#    already have cluster-admin on the cluster.
 #
 #    argobot force-syncs the matching Argo Application the moment a deploy
 #    happens, so step 7 and every later release land in seconds rather than
 #    waiting out Argo's reconcile interval. `cub cluster up` installs it for the
-#    mgmt cluster; without it here the two planes would behave differently under
-#    the same command. Pass --no-argobot to skip it.
-#
-#    --grant-access is needed after step 3's create-user path: ACK built the
-#    cluster as its own identity, so EKS trusts THAT principal and not yours,
-#    and the API server rejects you outright. It adds an access entry for your
-#    identity. Omit it if you already have cluster-admin on the cluster.
-cub eksinf enroll cluster --name inference-demo \
-  --eks-cluster inference-demo --region us-west-2 --grant-access
+#    mgmt cluster too, so both planes behave the same. Pass --no-argobot to
+#    skip it.
+cub cluster attach inference-demo --provider eks \
+  --aws-region us-west-2 --aws-profile <aws-profile> --grant-access
+
+#    Optional: group the cluster's Spaces with the rest of the stack in the
+#    component view.
+cub space update inference-demo --patch --label "Owner=EKS Inference"
+cub space update inference-demo-argo-apps --patch --label "Owner=EKS Inference"
 
 # 7. Deploy Karpenter, the GPU runtime, and the workloads.
 cub eksinf deploy --plane workload --target inference-demo/target
@@ -183,7 +191,8 @@ cub eksinf teardown --yes --profile <aws-profile>
 
 # The two local pieces teardown deliberately leaves to you.
 cub eksinf creds delete-user --yes        # the IAM user, if you created one
-cub cluster down --name inference-mgmt    # the kind cluster
+cub cluster detach inference-demo         # the EKS cluster's wiring (teardown deletes the cluster itself)
+cub cluster down inference-mgmt           # the kind cluster
 ```
 
 `teardown` goes THROUGH config rather than around it — deleting Kubernetes
@@ -260,7 +269,7 @@ targets.** Components are separated by which cluster applies them before they ar
 separated by anything else.
 
 ```
-  kind (cub cluster up)              AWS                  EKS (cub eksinf enroll)
+  kind (cub cluster up)              AWS                  EKS (cub cluster attach)
   ─────────────────────              ───                  ──────────────────────
   ack-controllers  ──────────────▶   VPC, subnets, NAT
   aws-network      ──────────────▶   IAM roles            karpenter
