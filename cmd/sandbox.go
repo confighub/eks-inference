@@ -249,7 +249,7 @@ func (r *runner) sandboxTargetSpace(name string, w io.Writer) error {
 
 // sandboxDeleteOrder returns the Spaces to delete, in an order that satisfies
 // the reference constraints. Split out to be testable: getting this wrong does
-// not fail loudly, it fails with an HTTP 400 naming a BridgeWorker rather than
+// not fail loudly, it fails with an HTTP 400 naming some other entity rather than
 // the Space actually holding the reference, and that has cost real time twice.
 //
 // The rules it encodes:
