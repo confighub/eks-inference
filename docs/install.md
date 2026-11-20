@@ -13,10 +13,10 @@ cub cluster up inference-mgmt
 ```
 
 This creates a kind cluster with Argo CD installed, plus two ConfigHub spaces:
-`inference-mgmt` (holding the cluster's OCI target and argobot's Channel) and
+`inference-mgmt` (holding the cluster's OCI target and k8sbot's Channel) and
 `inference-mgmt-argo-apps` (the root "app of apps" Application and every child
 Application Unit), and a service account `argo-inference-mgmt` that Argo CD
-pulls as and argobot runs as.
+pulls as and k8sbot runs as.
 
 Argo pulls config from ConfigHub's OCI registry — no worker runs anywhere.
 
@@ -232,13 +232,13 @@ empty — abandoning a stack rather than updating one:
 # 1. AWS, then this stack's variant Spaces (8 components + the profile).
 cub eksinf teardown --yes --delete-config
 
-# 2. The attached EKS cluster's wiring, including its argobot Space and its
+# 2. The attached EKS cluster's wiring, including its k8sbot Space and its
 #    service account. None of these are covered by teardown, which only knows
 #    about component variants. (If teardown has already deleted the EKS
 #    cluster, detach skips the in-cluster cleanup and still removes the config.)
 cub cluster detach inference-demo --delete-config
 
-# 3. The management cluster, its Spaces, argobot's, and its service account.
+# 3. The management cluster, its Spaces, k8sbot's, and its service account.
 cub cluster down inference-mgmt --delete-config
 
 # 4. Bases, if you want those gone too.

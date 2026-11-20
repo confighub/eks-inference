@@ -92,7 +92,7 @@ workload plane onto it:
 ```bash
 # 6. Attach EKS to ConfigHub: install Argo CD, create the cluster's service
 #    account and OCI target, bootstrap the root app-of-apps, and install
-#    argobot. This is plain cub, not the plugin; it never creates or destroys
+#    k8sbot. This is plain cub, not the plugin; it never creates or destroys
 #    a cluster, and "cub cluster attach --help" has the full story.
 #
 #    --provider eks resolves the cluster through the AWS CLI; the EKS cluster
@@ -102,10 +102,10 @@ workload plane onto it:
 #    outright. It adds an access entry for your identity. Omit it if you
 #    already have cluster-admin on the cluster.
 #
-#    argobot force-syncs the matching Argo Application the moment a deploy
+#    k8sbot force-syncs the matching Argo Application the moment a deploy
 #    happens, so step 7 and every later release land in seconds rather than
 #    waiting out Argo's reconcile interval. `cub cluster up` installs it for the
-#    mgmt cluster too, so both planes behave the same. Pass --no-argobot to
+#    mgmt cluster too, so both planes behave the same. Pass --no-k8sbot to
 #    skip it.
 cub cluster attach inference-demo --provider eks \
   --aws-region us-west-2 --aws-profile <aws-profile> --grant-access
