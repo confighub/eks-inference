@@ -64,7 +64,7 @@ push)
 		# path as the title — and `oras pull` then recreates a dist/ directory on
 		# the consumer's disk. Harmless for `cub variant upload`, which reads the
 		# layer either way, but it makes these bundles inconsistent with the other
-		# confighub config bundles (argobot, cubbychat) that ship bare filenames.
+		# confighub config bundles (k8sbot, cubbychat) that ship bare filenames.
 		(
 			cd dist && oras push \
 				"${REGISTRY}/${component}:latest" \
